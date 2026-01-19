@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Test Affichage Trafic</title>
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+        />
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+        <style>
+            body {
+                font-family: Arial;
+                margin: 0;
+                padding: 10px;
+            }
+            #map {
+                width: 100%;
+                height: 600px;
+                border: 2px solid #ccc;
+                margin-bottom: 20px;
+            }
+            .test-box {
+                background: #f5f5f5;
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 5px;
+            }
+            button {
+                padding: 10px 20px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #0056b3;
+            }
+            .result {
+                margin-top: 10px;
+                padding: 10px;
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 3px;
+                max-height: 300px;
+                overflow-y: auto;
+            }
+            .error {
+                color: red;
+            }
+            .success {
+                color: green;
+            }
+            .log-line {
+                font-family: monospace;
+                font-size: 12px;
+                margin: 2px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Test Diagnostic - Affichage Trafic</h1>
+
+        <div class="test-box">
+            <h2>1. Test API Traffic Flow</h2>
+            <button onclick="testTrafficAPI()">Tester API</button>
+            <div class="result" id="api-result"></div>
+        </div>
+
+        <div class="test-box">
+            <h2>2. Affichage Trafic sur Carte</h2>
+            <button onclick="loadTrafficOnMap()">Charger Trafic</button>
+            <button onclick="clearTraffic()">Effacer</button>
+            <div id="map"></div>
+            <div class="result" id="map-result"></div>
+        </div>
+
+        <script>
+            let map = null;
+            let trafficLayer = null;
+            const logDiv = (divId) => {
+                return {
+                    log: (msg) => {
+                        console.log(msg);
+                        const div = document.getElementById(divId);
+                        const line = document.createElement("div");
+                        line.className = "log-line";
+                        line.innerHTML = msg
+                            .replace(/</g, "&lt;")
+                            .replace(/>/g, "&gt;");
+                        div.appendChild(line);
+                    },
+                };
+            };
+
+            async function testTrafficAPI() {
+                const logger = logDiv("api-result");
+                document.getElementById("api-result").innerHTML = "";
+
+                logger.log(
+                    "Appel API: /api/traffic/flow?latitude=5.3698&longitude=-4.0036"
+                );
+
+                try {
+                    const response = await fetch(
+                        "/api/traffic/flow?latitude=5.3698&longitude=-4.0036"
+                    );
+                    logger.log(`Status: ${response.status}`);
+
+                    const data = await response.json();
+                    logger.log(`<span class="success">✅ Réponse reçue</span>`);
+
+                    logger.log(`<br><strong>Structure retournée:</strong>`);
+                    logger.log(`Keys: ${Object.keys(data).join(", ")}`);
+
+                    if (data.flowSegmentData) {
+                        const segments = Array.isArray(data.flowSegmentData)
+                            ? data.flowSegmentData
+                            : [data.flowSegmentData];
+                        logger.log(
+                            `<br><strong>flowSegmentData: ${segments.length} segment(s)</strong>`
+                        );
+
+                        if (segments.length > 0) {
+                            const seg = segments[0];
+                            logger.log(`<br><strong>Premier segment:</strong>`);
+                            logger.log(
+                                `  Keys: ${Object.keys(seg).join(", ")}`
+                            );
+
+                            if (seg.coordinates) {
+                                logger.log(
+                                    `  coordinates type: ${typeof seg.coordinates}`
+                                );
+                                logger.log(
+                                    `  coordinates: ${JSON.stringify(
+                                        seg.coordinates
+                                    ).substring(0, 200)}...`
+                                );
+
+                                if (Array.isArray(seg.coordinates)) {
+                                    logger.log(`  ✅ coordinates est un Array`);
+                                    if (seg.coordinates.length > 0) {
+                                        logger.log(
+                                            `  [0]: ${JSON.stringify(
+                                                seg.coordinates[0]
+                                            )}`
+                                        );
+                                    }
+                                } else if (seg.coordinates.coordinate) {
+                                    logger.log(
+                                        `  ✅ coordinates.coordinate existe`
+                                    );
+                                    logger.log(
+                                        `  Type: ${typeof seg.coordinates
+                                            .coordinate}`
+                                    );
+                                }
+                            }
+
+                            logger.log(`  currentSpeed: ${seg.currentSpeed}`);
+                            logger.log(`  freeFlowSpeed: ${seg.freeFlowSpeed}`);
+                        }
+                    } else {
+                        logger.log(
+                            `<span class="error">❌ Pas de flowSegmentData</span>`
+                        );
+                        logger.log(
+                            `Données complètes: ${JSON.stringify(
+                                data,
+                                null,
+                                2
+                            ).substring(0, 500)}...`
+                        );
+                    }
+                } catch (error) {
+                    logger.log(
+                        `<span class="error">❌ Erreur: ${error.message}</span>`
+                    );
+                }
+            }
+
+            function initMap() {
+                if (map === null) {
+                    map = L.map("map").setView([5.3698, -4.0036], 13);
+                    L.tileLayer(
+                        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                        {
+                            maxZoom: 18,
+                            attribution: "© OpenStreetMap",
+                        }
+                    ).addTo(map);
+                    trafficLayer = L.featureGroup().addTo(map);
+                }
+            }
+
+            async function loadTrafficOnMap() {
+                if (map === null) initMap();
+
+                const logger = logDiv("map-result");
+                document.getElementById("map-result").innerHTML = "";
+
+                logger.log("Chargement trafic pour la carte...");
+
+                try {
+                    const response = await fetch(
+                        "/api/traffic/flow?latitude=5.3698&longitude=-4.0036"
+                    );
+                    const data = await response.json();
+
+                    if (!data.flowSegmentData) {
+                        logger.log(
+                            '<span class="error">❌ Pas de flowSegmentData</span>'
+                        );
+                        return;
+                    }
+
+                    const segments = Array.isArray(data.flowSegmentData)
+                        ? data.flowSegmentData
+                        : [data.flowSegmentData];
+                    logger.log(`Affichage de ${segments.length} segment(s)...`);
+
+                    trafficLayer.clearLayers();
+                    let displayedCount = 0;
+
+                    segments.forEach((seg, i) => {
+                        try {
+                            // Extraire les coordonnées
+                            let coordinates = [];
+
+                            if (Array.isArray(seg.coordinates)) {
+                                coordinates = seg.coordinates;
+                                logger.log(
+                                    `Segment ${i}: coordinates est un Array (${coordinates.length} points)`
+                                );
+                            } else if (
+                                seg.coordinates &&
+                                seg.coordinates.coordinate
+                            ) {
+                                if (Array.isArray(seg.coordinates.coordinate)) {
+                                    coordinates = seg.coordinates.coordinate;
+                                    logger.log(
+                                        `Segment ${i}: coordinates.coordinate est un Array`
+                                    );
+                                } else {
+                                    coordinates = Object.values(
+                                        seg.coordinates.coordinate
+                                    );
+                                    logger.log(
+                                        `Segment ${i}: coordinates.coordinate est un Object (${coordinates.length} points)`
+                                    );
+                                }
+                            }
+
+                            if (coordinates.length === 0) {
+                                logger.log(
+                                    `Segment ${i}: ❌ Pas de coordonnées`
+                                );
+                                return;
+                            }
+
+                            // Calculer la couleur
+                            const ratio = seg.currentSpeed / seg.freeFlowSpeed;
+                            let color;
+                            if (ratio > 0.8) color = "#00AA00";
+                            else if (ratio > 0.5) color = "#FFA500";
+                            else color = "#FF0000";
+
+                            // Créer la polyline
+                            const polyline = L.polyline(coordinates, {
+                                color: color,
+                                weight: 4,
+                                opacity: 0.8,
+                            }).addTo(trafficLayer);
+
+                            displayedCount++;
+                            logger.log(
+                                `Segment ${i}: ✅ Polyline créée (couleur: ${color}, ${coordinates.length} points)`
+                            );
+                        } catch (e) {
+                            logger.log(`Segment ${i}: ❌ Erreur: ${e.message}`);
+                        }
+                    });
+
+                    logger.log(
+                        `<span class="success">✅ ${displayedCount}/${segments.length} segments affichés</span>`
+                    );
+
+                    // Zoom sur les segments
+                    if (displayedCount > 0) {
+                        map.fitBounds(trafficLayer.getBounds(), {
+                            padding: [50, 50],
+                        });
+                    }
+                } catch (error) {
+                    logger.log(
+                        `<span class="error">❌ Erreur: ${error.message}</span>`
+                    );
+                }
+            }
+
+            function clearTraffic() {
+                if (trafficLayer) {
+                    trafficLayer.clearLayers();
+                    document.getElementById("map-result").innerHTML =
+                        '<div class="log-line success">✅ Trafic effacé</div>';
+                }
+            }
+
+            // Initialiser la carte au chargement
+            window.addEventListener("load", () => {
+                initMap();
+            });
+        </script>
+    </body>
+</html>

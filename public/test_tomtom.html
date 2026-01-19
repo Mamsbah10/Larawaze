@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Test TomTom Traffic API</title>
+        <link
+            rel="stylesheet"
+            href="https://unpkg.com/leaflet/dist/leaflet.css"
+        />
+        <style>
+            body {
+                margin: 0;
+                padding: 20px;
+                font-family: Arial, sans-serif;
+            }
+            #map {
+                height: 600px;
+                border: 2px solid #ccc;
+                margin: 20px 0;
+            }
+            .controls {
+                margin: 20px 0;
+            }
+            button {
+                padding: 10px 20px;
+                margin: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            .log {
+                border: 1px solid #ddd;
+                padding: 15px;
+                height: 300px;
+                overflow-y: auto;
+                background: #f5f5f5;
+            }
+            .log p {
+                margin: 5px 0;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            .error {
+                color: red;
+            }
+            .success {
+                color: green;
+            }
+            .info {
+                color: blue;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>🚦 Test API TomTom Traffic</h1>
+
+        <div class="controls">
+            <button onclick="testAPI()">🧪 Tester API Directement</button>
+            <button onclick="toggleTraffic()">
+                🛣️ Activer/Désactiver Trafic
+            </button>
+            <button onclick="clearLogs()">🗑️ Effacer Logs</button>
+        </div>
+
+        <div id="map"></div>
+
+        <h3>📋 Console de Débogage:</h3>
+        <div class="log" id="logs"></div>
+
+        <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+        <script>
+            const API_KEY = "uYMyamzlK0GNtueiA9CfOJMIbAI22lRS";
+            let map,
+                trafficLayer,
+                trafficEnabled = false;
+
+            function log(message, type = "info") {
+                const logsDiv = document.getElementById("logs");
+                const timestamp = new Date().toLocaleTimeString();
+                const className = type; // "info", "error", "success"
+                logsDiv.innerHTML += `<p class="${className}">[${timestamp}] ${message}</p>`;
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+                console.log(message);
+            }
+
+            function clearLogs() {
+                document.getElementById("logs").innerHTML = "";
+            }
+
+            function testAPI() {
+                log("🧪 Test de l'API TomTom...", "info");
+
+                const tileUrl = `https://api.tomtom.com/traffic/map/4/flow/absolute/13/4352/2891.png?key=${API_KEY}`;
+                log(
+                    `📡 URL testée: ${tileUrl.replace(API_KEY, "KEY***")}`,
+                    "info"
+                );
+
+                fetch(tileUrl, { method: "HEAD", mode: "no-cors" })
+                    .then((response) => {
+                        log(
+                            `✅ Réponse API: ${response.status} ${response.statusText}`,
+                            "success"
+                        );
+                    })
+                    .catch((error) => {
+                        log(`❌ Erreur API: ${error}`, "error");
+                    });
+            }
+
+            function toggleTraffic() {
+                log("📍 Toggle du trafic...", "info");
+
+                if (!trafficLayer) {
+                    log("❌ Couche trafic non initialisée!", "error");
+                    return;
+                }
+
+                if (!trafficEnabled) {
+                    log("✅ Activation du trafic...", "info");
+                    try {
+                        trafficLayer.addTo(map);
+                        trafficEnabled = true;
+                        log("✅ Trafic activé sur la carte!", "success");
+                    } catch (err) {
+                        log(`❌ Erreur: ${err.message}`, "error");
+                    }
+                } else {
+                    log("❌ Désactivation du trafic...", "info");
+                    try {
+                        map.removeLayer(trafficLayer);
+                        trafficEnabled = false;
+                        log("❌ Trafic désactivé de la carte!", "success");
+                    } catch (err) {
+                        log(`❌ Erreur: ${err.message}`, "error");
+                    }
+                }
+            }
+
+            // Initialisation
+            document.addEventListener("DOMContentLoaded", () => {
+                log("🚀 Initialisation...", "info");
+
+                // Créer la carte
+                map = L.map("map").setView([48.8566, 2.3522], 12); // Paris par défaut
+                log("✅ Carte Leaflet créée", "success");
+
+                // Ajouter le fond OSM
+                L.tileLayer(
+                    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                    {
+                        attribution: "© OpenStreetMap",
+                    }
+                ).addTo(map);
+                log("✅ Tuiles OSM chargées", "success");
+
+                // Créer la couche trafic
+                const trafficUrl = `https://api.tomtom.com/traffic/map/4/flow/absolute/{z}/{x}/{y}.png?key=${API_KEY}`;
+                log(
+                    `📡 Création de la couche avec: ${trafficUrl.replace(
+                        API_KEY,
+                        "KEY***"
+                    )}`,
+                    "info"
+                );
+
+                try {
+                    trafficLayer = L.tileLayer(trafficUrl, {
+                        attribution: "© TomTom",
+                        maxZoom: 22,
+                        opacity: 0.8,
+                        crossOrigin: "anonymous",
+                    });
+                    log("✅ Couche TomTom Traffic créée!", "success");
+                    log(
+                        "💡 Cliquez sur '🛣️ Activer/Désactiver Trafic' pour afficher le trafic",
+                        "info"
+                    );
+                } catch (err) {
+                    log(`❌ Erreur création couche: ${err.message}`, "error");
+                }
+            });
+        </script>
+    </body>
+</html>

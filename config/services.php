@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'tomtom' => [
+        'api_key' => env('TOMTOM_API_KEY'),
+        'base_url' => 'https://api.tomtom.com',
+    ],
+
 ];

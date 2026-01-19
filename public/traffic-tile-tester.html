@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>🔧 Testeur de Tuiles Traffic LaraWaze</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                    Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                padding: 20px;
+            }
+
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 10px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                overflow: hidden;
+            }
+
+            header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 30px;
+                text-align: center;
+            }
+
+            header h1 {
+                font-size: 2em;
+                margin-bottom: 10px;
+            }
+
+            header p {
+                font-size: 1.1em;
+                opacity: 0.9;
+            }
+
+            .content {
+                padding: 30px;
+            }
+
+            .section {
+                margin-bottom: 30px;
+            }
+
+            .section h2 {
+                color: #667eea;
+                border-bottom: 2px solid #667eea;
+                padding-bottom: 10px;
+                margin-bottom: 15px;
+                font-size: 1.5em;
+            }
+
+            .form-group {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 15px;
+                margin-bottom: 15px;
+            }
+
+            .form-group.full {
+                grid-template-columns: 1fr;
+            }
+
+            label {
+                display: block;
+                font-weight: 600;
+                color: #333;
+                margin-bottom: 5px;
+            }
+
+            input[type="number"],
+            input[type="text"],
+            select {
+                width: 100%;
+                padding: 10px;
+                border: 2px solid #e0e0e0;
+                border-radius: 5px;
+                font-size: 1em;
+                transition: border-color 0.3s;
+            }
+
+            input[type="number"]:focus,
+            input[type="text"]:focus,
+            select:focus {
+                outline: none;
+                border-color: #667eea;
+            }
+
+            button {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 12px 30px;
+                border-radius: 5px;
+                font-size: 1em;
+                font-weight: 600;
+                cursor: pointer;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+
+            button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+            }
+
+            button:active {
+                transform: translateY(0);
+            }
+
+            .results {
+                background: #f5f5f5;
+                border-left: 4px solid #667eea;
+                padding: 15px;
+                border-radius: 5px;
+                margin-top: 15px;
+                font-family: "Courier New", monospace;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+
+            .status-success {
+                color: #4caf50;
+                font-weight: bold;
+            }
+
+            .status-error {
+                color: #f44336;
+                font-weight: bold;
+            }
+
+            .status-warning {
+                color: #ff9800;
+                font-weight: bold;
+            }
+
+            .tiles-preview {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+                gap: 15px;
+                margin-top: 15px;
+            }
+
+            .tile {
+                border: 2px solid #e0e0e0;
+                border-radius: 5px;
+                overflow: hidden;
+                aspect-ratio: 1;
+                cursor: pointer;
+                transition: all 0.3s;
+            }
+
+            .tile:hover {
+                border-color: #667eea;
+                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            }
+
+            .tile img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+
+            .tile-error {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: #f5f5f5;
+                color: #999;
+                font-size: 0.9em;
+                text-align: center;
+                padding: 10px;
+            }
+
+            .examples {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 10px;
+            }
+
+            .example-btn {
+                background: #f0f0f0;
+                color: #333;
+                padding: 10px;
+                border: 1px solid #e0e0e0;
+                border-radius: 5px;
+                cursor: pointer;
+                transition: all 0.3s;
+            }
+
+            .example-btn:hover {
+                background: #e0e0e0;
+                border-color: #667eea;
+            }
+
+            .info-box {
+                background: #e3f2fd;
+                border-left: 4px solid #2196f3;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 15px;
+            }
+
+            .info-box strong {
+                color: #2196f3;
+            }
+
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 15px;
+            }
+
+            th,
+            td {
+                border: 1px solid #e0e0e0;
+                padding: 10px;
+                text-align: left;
+            }
+
+            th {
+                background: #f5f5f5;
+                font-weight: 600;
+                color: #333;
+            }
+
+            tr:hover {
+                background: #f9f9f9;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1>🔧 Testeur de Tuiles Traffic LaraWaze</h1>
+                <p>Testez et déboguez vos coordonnées de tuiles TomTom</p>
+            </header>
+
+            <div class="content">
+                <!-- Section 1: Convertisseur -->
+                <div class="section">
+                    <h2>1️⃣ Convertisseur Coordonnées</h2>
+
+                    <div class="info-box">
+                        <strong>ℹ️ Info:</strong> Convertissez vos coordonnées
+                        lat/lon en indice de tuile z/x/y
+                    </div>
+
+                    <div class="form-group">
+                        <div>
+                            <label for="lat">Latitude (-90 à 90):</label>
+                            <input
+                                type="number"
+                                id="lat"
+                                value="48.8566"
+                                min="-90"
+                                max="90"
+                                step="0.0001"
+                            />
+                        </div>
+                        <div>
+                            <label for="lon">Longitude (-180 à 180):</label>
+                            <input
+                                type="number"
+                                id="lon"
+                                value="2.3522"
+                                min="-180"
+                                max="180"
+                                step="0.0001"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <div>
+                            <label for="zoom">Niveau de Zoom (0-28):</label>
+                            <input
+                                type="number"
+                                id="zoom"
+                                value="15"
+                                min="0"
+                                max="28"
+                            />
+                        </div>
+                    </div>
+
+                    <button onclick="convertLatLonToTile()">
+                        🔄 Convertir en Z/X/Y
+                    </button>
+
+                    <div id="convertResult"></div>
+
+                    <h3 style="margin-top: 20px; margin-bottom: 10px">
+                        Exemples rapides:
+                    </h3>
+                    <div class="examples">
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('Paris', 48.8566, 2.3522, 15)"
+                        >
+                            Paris 🇫🇷
+                        </button>
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('New York', 40.7128, -74.0060, 15)"
+                        >
+                            New York 🇺🇸
+                        </button>
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('Tokyo', 35.6762, 139.6503, 15)"
+                        >
+                            Tokyo 🇯🇵
+                        </button>
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('Londres', 51.5074, -0.1278, 15)"
+                        >
+                            Londres 🇬🇧
+                        </button>
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('Sydney', -33.8688, 151.2093, 15)"
+                        >
+                            Sydney 🇦🇺
+                        </button>
+                        <button
+                            class="example-btn"
+                            onclick="loadExample('Dubai', 25.2048, 55.2708, 15)"
+                        >
+                            Dubai 🇦🇪
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 2: Testeur de Tuiles -->
+                <div class="section">
+                    <h2>2️⃣ Testeur de Tuiles</h2>
+
+                    <div class="info-box">
+                        <strong>ℹ️ Info:</strong> Testez si une tuile traffic
+                        existe à ces coordonnées z/x/y
+                    </div>
+
+                    <div class="form-group">
+                        <div>
+                            <label for="tileZ">Zoom (Z):</label>
+                            <input
+                                type="number"
+                                id="tileZ"
+                                value="15"
+                                min="0"
+                                max="28"
+                            />
+                        </div>
+                        <div>
+                            <label for="tileX">Coordonnée X:</label>
+                            <input
+                                type="number"
+                                id="tileX"
+                                value="16408"
+                                min="0"
+                            />
+                        </div>
+                        <div>
+                            <label for="tileY">Coordonnée Y:</label>
+                            <input
+                                type="number"
+                                id="tileY"
+                                value="10729"
+                                min="0"
+                            />
+                        </div>
+                    </div>
+
+                    <button onclick="testTile()">🔍 Tester cette Tuile</button>
+                    <button
+                        onclick="testMultipleTiles()"
+                        style="margin-left: 10px; background: #ff9800"
+                    >
+                        🔍 Tester une Grille 3×3
+                    </button>
+
+                    <div id="tileResult"></div>
+
+                    <div id="tilesPreview" class="tiles-preview"></div>
+
+                    <h3 style="margin-top: 20px; margin-bottom: 10px">
+                        Tuiles à essayer:
+                    </h3>
+                    <table>
+                        <tr>
+                            <th>Lieu</th>
+                            <th>Zoom</th>
+                            <th>X</th>
+                            <th>Y</th>
+                            <th>Action</th>
+                        </tr>
+                        <tr>
+                            <td>Paris</td>
+                            <td>15</td>
+                            <td>16408</td>
+                            <td>10729</td>
+                            <td>
+                                <button
+                                    class="example-btn"
+                                    onclick="loadTile(15, 16408, 10729)"
+                                >
+                                    Tester
+                                </button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>New York</td>
+                            <td>15</td>
+                            <td>10486</td>
+                            <td>12310</td>
+                            <td>
+                                <button
+                                    class="example-btn"
+                                    onclick="loadTile(15, 10486, 12310)"
+                                >
+                                    Tester
+                                </button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Tokyo</td>
+                            <td>15</td>
+                            <td>29127</td>
+                            <td>12755</td>
+                            <td>
+                                <button
+                                    class="example-btn"
+                                    onclick="loadTile(15, 29127, 12755)"
+                                >
+                                    Tester
+                                </button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Problématique</td>
+                            <td>15</td>
+                            <td>16023</td>
+                            <td>15894</td>
+                            <td>
+                                <button
+                                    class="example-btn"
+                                    onclick="loadTile(15, 16023, 15894)"
+                                >
+                                    Tester
+                                </button>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Section 3: Informations -->
+                <div class="section">
+                    <h2>3️⃣ Informations Utiles</h2>
+
+                    <div class="info-box">
+                        <strong>🎯 Problème diagnostiqué:</strong>
+                        <br />Les erreurs 404 que vous voyez ne viennent pas de
+                        Laravel mais de l'API TomTom. <br />Les coordonnées
+                        z=15, x=16023, y=15894 ne correspondent à aucune tuile
+                        traffic disponible.
+                    </div>
+
+                    <h3 style="margin-top: 15px; margin-bottom: 10px">
+                        📋 Ressources:
+                    </h3>
+                    <ul style="list-style-position: inside; line-height: 1.8">
+                        <li>
+                            <a
+                                href="https://developer.tomtom.com"
+                                target="_blank"
+                                >🔗 TomTom Developer Portal</a
+                            >
+                        </li>
+                        <li>
+                            <a
+                                href="https://wiki.openstreetmap.org/wiki/Slippy_map_tilenames"
+                                target="_blank"
+                                >🗺️ Calculateur de Tuiles OSM</a
+                            >
+                        </li>
+                        <li>
+                            <a
+                                href="https://en.wikipedia.org/wiki/Web_Mercator_projection"
+                                target="_blank"
+                                >📐 Web Mercator Projection</a
+                            >
+                        </li>
+                    </ul>
+
+                    <h3 style="margin-top: 15px; margin-bottom: 10px">
+                        💾 Fichiers de Débogage:
+                    </h3>
+                    <ul style="list-style-position: inside; line-height: 1.8">
+                        <li>final_test.php - Test complet avec TomTom</li>
+                        <li>debug_404_traffic.php - Analyse du problème</li>
+                        <li>
+                            TileCoordinateConverter.js - Utilitaire de
+                            conversion
+                        </li>
+                        <li>SOLUTION_404_TRAFFIC.md - Solutions détaillées</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <script src="/js/TileCoordinateConverter.js"></script>
+        <script>
+            function loadExample(name, lat, lon, zoom) {
+                document.getElementById("lat").value = lat;
+                document.getElementById("lon").value = lon;
+                document.getElementById("zoom").value = zoom;
+                convertLatLonToTile();
+            }
+
+            function convertLatLonToTile() {
+                const lat = parseFloat(document.getElementById("lat").value);
+                const lon = parseFloat(document.getElementById("lon").value);
+                const zoom = parseInt(document.getElementById("zoom").value);
+
+                if (isNaN(lat) || isNaN(lon) || isNaN(zoom)) {
+                    showResult(
+                        "convertResult",
+                        "❌ Erreur: Valeurs invalides",
+                        "error"
+                    );
+                    return;
+                }
+
+                const tile = TileCoordinateConverter.latLonToTile(
+                    lat,
+                    lon,
+                    zoom
+                );
+
+                const result = `
+✅ Conversion réussie!
+
+Coordonnées: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°
+Zoom: ${zoom}
+
+Résultat:
+  Z: ${tile.z}
+  X: ${tile.x}
+  Y: ${tile.y}
+
+URL à tester:
+  http://localhost:8000/api/traffic/tile/${tile.z}/${tile.x}/${tile.y}
+
+Cherchez cette tuile dans la section "Testeur de Tuiles" →
+            `;
+
+                // Auto-remplir les champs de tuile
+                document.getElementById("tileZ").value = tile.z;
+                document.getElementById("tileX").value = tile.x;
+                document.getElementById("tileY").value = tile.y;
+
+                showResult("convertResult", result, "success");
+            }
+
+            function loadTile(z, x, y) {
+                document.getElementById("tileZ").value = z;
+                document.getElementById("tileX").value = x;
+                document.getElementById("tileY").value = y;
+                testTile();
+            }
+
+            async function testTile() {
+                const z = parseInt(document.getElementById("tileZ").value);
+                const x = parseInt(document.getElementById("tileX").value);
+                const y = parseInt(document.getElementById("tileY").value);
+
+                const url = `/api/traffic/tile/${z}/${x}/${y}`;
+                showResult(
+                    "tileResult",
+                    `⏳ Test en cours... (${url})`,
+                    "warning"
+                );
+                document.getElementById("tilesPreview").innerHTML = "";
+
+                try {
+                    const response = await fetch(url);
+
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        const imageUrl = URL.createObjectURL(blob);
+
+                        showResult(
+                            "tileResult",
+                            `
+✅ Tuile disponible!
+
+Statut: ${response.status}
+Type: ${response.headers.get("content-type")}
+Taille: ${(blob.size / 1024).toFixed(2)} KB
+
+L'image s'affiche ci-dessous →
+                    `,
+                            "success"
+                        );
+
+                        // Afficher l'image
+                        document.getElementById("tilesPreview").innerHTML = `
+                        <div class="tile">
+                            <img src="${imageUrl}" alt="Tuile z=${z} x=${x} y=${y}">
+                        </div>
+                    `;
+                    } else {
+                        showResult(
+                            "tileResult",
+                            `
+❌ Tuile non disponible (HTTP ${response.status})
+
+Cause possible:
+  • Cette tuile n'existe pas chez TomTom
+  • Cette région n'a pas de données traffic
+  • Les coordonnées sont invalides
+
+Solutions:
+  1. Essayez Paris: z=15, x=16408, y=10729
+  2. Convertissez vos coordonnées avec le formulaire ci-dessus
+  3. Vérifiez la couverture TomTom: https://developer.tomtom.com
+                    `,
+                            "error"
+                        );
+                    }
+                } catch (error) {
+                    showResult(
+                        "tileResult",
+                        `
+⚠️ Erreur: ${error.message}
+
+Assurez-vous que:
+  1. Le serveur Laravel est lancé (php artisan serve)
+  2. L'URL est correcte: http://localhost:8000
+  3. La route existe: /api/traffic/tile/{z}/{x}/{y}
+                `,
+                        "error"
+                    );
+                }
+            }
+
+            async function testMultipleTiles() {
+                const centerZ = parseInt(
+                    document.getElementById("tileZ").value
+                );
+                const centerX = parseInt(
+                    document.getElementById("tileX").value
+                );
+                const centerY = parseInt(
+                    document.getElementById("tileY").value
+                );
+
+                showResult(
+                    "tileResult",
+                    "⏳ Test d'une grille 3×3...",
+                    "warning"
+                );
+
+                const results = [];
+                document.getElementById("tilesPreview").innerHTML = "";
+
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const x = centerX + dx;
+                        const y = centerY + dy;
+                        const z = centerZ;
+
+                        try {
+                            const response = await fetch(
+                                `/api/traffic/tile/${z}/${x}/${y}`
+                            );
+                            const status = response.ok ? "✅" : "❌";
+                            results.push({
+                                z,
+                                x,
+                                y,
+                                status,
+                                code: response.status,
+                            });
+
+                            if (response.ok) {
+                                const blob = await response.blob();
+                                const imageUrl = URL.createObjectURL(blob);
+                                document.getElementById(
+                                    "tilesPreview"
+                                ).innerHTML += `
+                                <div class="tile">
+                                    <img src="${imageUrl}" alt="z=${z} x=${x} y=${y}">
+                                </div>
+                            `;
+                            } else {
+                                document.getElementById(
+                                    "tilesPreview"
+                                ).innerHTML += `
+                                <div class="tile">
+                                    <div class="tile-error">
+                                        x=${x}<br>y=${y}<br>
+                                        HTTP ${response.status}
+                                    </div>
+                                </div>
+                            `;
+                            }
+                        } catch (error) {
+                            results.push({
+                                z,
+                                x,
+                                y,
+                                status: "⚠️",
+                                code: "ERROR",
+                                message: error.message,
+                            });
+                            document.getElementById(
+                                "tilesPreview"
+                            ).innerHTML += `
+                            <div class="tile">
+                                <div class="tile-error">
+                                    x=${x}<br>y=${y}<br>
+                                    Erreur
+                                </div>
+                            </div>
+                        `;
+                        }
+                    }
+                }
+
+                const successCount = results.filter(
+                    (r) => r.status === "✅"
+                ).length;
+                const totalCount = results.length;
+
+                let resultText = `
+Résultats (${successCount}/${totalCount} tuiles disponibles):
+
+`;
+                results.forEach((r) => {
+                    resultText += `${r.status} z=${r.z} x=${r.x} y=${r.y} (HTTP ${r.code})\n`;
+                });
+
+                showResult(
+                    "tileResult",
+                    resultText,
+                    successCount > 0 ? "success" : "error"
+                );
+            }
+
+            function showResult(elementId, message, type) {
+                const element = document.getElementById(elementId);
+                element.className =
+                    "results status-" +
+                    (type === "success"
+                        ? "success"
+                        : type === "error"
+                        ? "error"
+                        : "warning");
+                element.textContent = message;
+            }
+        </script>
+    </body>
+</html>

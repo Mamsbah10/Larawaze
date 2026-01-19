@@ -1,3 +1,6 @@
+// Import du gestionnaire de trafic TomTom
+import "./traffic.js";
+
 // =========================================================================
 // CONFIGURATION ET INITIALISATION
 // =========================================================================
@@ -27,9 +30,44 @@ let currentEventType = null;
 // Cache pour reverse-geocoding (évite d'appeler l'API trop souvent)
 let lastGeocode = { lat: null, lon: null, label: null, ts: 0 };
 
-// NOUVEAU: MODE DE TRANSPORT PAR DÉFAUT
-let travelMode = "driving"; // 'driving', 'bike', 'foot'
+// Helper pour synchroniser les coordonnées avec window (pour la console)
+function updateGlobalCoords(lat, lon) {
+    userLat = lat;
+    userLon = lon;
+    window.userLat = lat;
+    window.userLon = lon;
+}
 
+// Expose helper to global window so it can be called from console/devtools
+try {
+    window.updateGlobalCoords = updateGlobalCoords;
+} catch (e) {}
+
+// NOUVEAU: MODE DE TRANSPORT PAR DÉFAUT
+// Charger depuis localStorage ou utiliser 'driving' par défaut
+let travelMode = localStorage.getItem("travelMode") || "driving"; // 'driving', 'bike', 'foot'
+
+// Corrige les chemins d'icônes Leaflet (évite les 404 si les images par défaut
+// ne sont pas présentes sous /vendor/leaflet/images). On redirige vers
+// des ressources existantes dans /icons ou une image transparente pour l'ombre.
+try {
+    if (typeof L !== "undefined" && L.Icon && L.Icon.Default) {
+        L.Icon.Default.mergeOptions({
+            iconUrl: "/icons/depart.png",
+            iconRetinaUrl: "/icons/depart.png",
+            // use a real file path instead of a data URI to avoid concat bugs
+            shadowUrl: "/icons/depart.png",
+        });
+    }
+} catch (e) {
+    console.debug("Leaflet icon override failed:", e);
+}
+// Prevent Leaflet from prepending the detected vendor path to absolute or data URIs
+try {
+    if (typeof L !== "undefined" && L.Icon && L.Icon.Default) {
+        L.Icon.Default.imagePath = "";
+    }
+} catch (e) {}
 // =========================================================================
 // GESTION DU SIDEBAR DROIT (25% DE L'ÉCRAN)
 // =========================================================================
@@ -37,22 +75,23 @@ function openSidebar(title, content) {
     const sidebarTitle = document.getElementById("sidebarTitle");
     const sidebarContent = document.getElementById("sidebarContent");
 
-    sidebarTitle.innerHTML = title;
-    sidebarContent.innerHTML = content;
+    if (sidebarTitle) sidebarTitle.innerHTML = title;
+    if (sidebarContent) sidebarContent.innerHTML = content;
 
-    // Animer l'apparition
+    // Animer l'apparition si le sidebar existe
     const sidebar = document.getElementById("right-sidebar");
-    sidebar.style.animation = "slideInRight 0.3s ease-in-out";
+    if (sidebar) sidebar.style.animation = "slideInRight 0.3s ease-in-out";
 }
 
 function closeSidebar() {
     const sidebar = document.getElementById("right-sidebar");
     const sidebarContent = document.getElementById("sidebarContent");
-    sidebar.style.animation = "slideOutRight 0.3s ease-in-out";
+    if (sidebar) sidebar.style.animation = "slideOutRight 0.3s ease-in-out";
 
     setTimeout(() => {
-        sidebarContent.innerHTML =
-            '<p class="text-muted">En attente de contenu...</p>';
+        if (sidebarContent)
+            sidebarContent.innerHTML =
+                '<p class="text-muted">En attente de contenu...</p>';
     }, 300);
 }
 
@@ -64,12 +103,14 @@ function closeSidebar() {
 function setTravelMode(mode) {
     if (navigationMode) {
         alert(
-            "Veuillez arrêter la navigation avant de changer de mode de transport."
+            "Veuillez arrêter la navigation avant de changer de mode de transport.",
         );
         return;
     }
 
     travelMode = mode;
+    // Sauvegarder en localStorage
+    localStorage.setItem("travelMode", mode);
 
     // Mise à jour de l'état des boutons
     document.querySelectorAll("#mode-selector .btn").forEach((btn) => {
@@ -83,7 +124,7 @@ function setTravelMode(mode) {
     alert(
         `Mode de transport défini sur : ${
             mode.charAt(0).toUpperCase() + mode.slice(1)
-        }`
+        }`,
     );
 }
 
@@ -91,23 +132,106 @@ function setTravelMode(mode) {
 // GESTION DE LA POSITION
 // =========================================================================
 
+// Indicateur pour exécuter le refresh initial une fois la carte créée
+let needInitialRefresh = false;
 if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
         (pos) => {
             userLat = pos.coords.latitude;
             userLon = pos.coords.longitude;
-            map.setView([userLat, userLon], 15);
-            // utiliser l'icône utilisateur si disponible (heading peut être undefined)
-            updateMapLocation(userLat, userLon, pos.coords.heading ?? null);
-            refreshEventsAndCheckForNotifications(true); // Premier chargement
+            // SI la carte est déjà initialisée, on centre et on met à jour immédiatement
+            if (typeof map !== "undefined" && map) {
+                try {
+                    map.setView([userLat, userLon], 15);
+                    updateMapLocation(
+                        userLat,
+                        userLon,
+                        pos.coords.heading ?? null,
+                    );
+                    refreshEventsAndCheckForNotifications(true); // Premier chargement
+                } catch (e) {
+                    console.debug(
+                        "geolocation init deferred due to map error",
+                        e,
+                    );
+                    needInitialRefresh = true;
+                }
+            } else {
+                // Sinon, on garde l'info pour l'utiliser après l'initialisation de la carte
+                needInitialRefresh = true;
+            }
         },
         (err) => {
             console.warn("Géo non dispo :", err);
-            refreshEventsAndCheckForNotifications(true);
-        }
+            if (typeof map !== "undefined" && map) {
+                try {
+                    refreshEventsAndCheckForNotifications(true);
+                } catch (e) {
+                    needInitialRefresh = true;
+                }
+            } else {
+                needInitialRefresh = true;
+            }
+            // Show permission toast so user can grant access explicitly
+            try {
+                setTimeout(() => {
+                    const toast = document.getElementById(
+                        "location-perm-toast",
+                    );
+                    const grant = document.getElementById("grantLocationBtn");
+                    const dismiss =
+                        document.getElementById("dismissLocationBtn");
+                    if (toast && grant && dismiss) {
+                        toast.style.display = "block";
+                        grant.onclick = requestLocationPermission;
+                        dismiss.onclick = () => {
+                            toast.style.display = "none";
+                        };
+                    }
+                }, 500);
+            } catch (e) {}
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
 } else {
-    refreshEventsAndCheckForNotifications(true);
+    needInitialRefresh = true;
+}
+
+// Demande explicite de permission et mise à jour de la position
+function requestLocationPermission() {
+    if (!navigator.geolocation) {
+        alert("Géolocalisation non supportée par ce navigateur.");
+        return;
+    }
+    try {
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                updateGlobalCoords(pos.coords.latitude, pos.coords.longitude);
+                try {
+                    if (map)
+                        map.setView(
+                            [pos.coords.latitude, pos.coords.longitude],
+                            15,
+                        );
+                } catch (e) {}
+                const toast = document.getElementById("location-perm-toast");
+                if (toast) toast.style.display = "none";
+                // refresh now that we have coords
+                try {
+                    refreshEventsAndCheckForNotifications(true);
+                } catch (e) {}
+            },
+            (err) => {
+                console.warn("requestLocationPermission failed", err);
+                alert(
+                    "Impossible d'accéder à la position. Veuillez vérifier les permissions du navigateur.",
+                );
+            },
+            { enableHighAccuracy: true, timeout: 15000 },
+        );
+    } catch (e) {
+        console.debug("requestLocationPermission exception", e);
+    }
 }
 
 // =========================================================================
@@ -115,42 +239,83 @@ if (navigator.geolocation) {
 // =========================================================================
 
 function openEventModal(type) {
-    if (!userLat || !userLon)
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLon))
         return alert(
-            "Position non disponible. Veuillez attendre la localisation GPS."
+            "Position non disponible. Veuillez attendre la localisation GPS.",
         );
 
     currentEventType = type;
 
     const eventTypeDisplay = document.getElementById("eventTypeName");
-    eventTypeDisplay.innerText = type.charAt(0).toUpperCase() + type.slice(1);
+    if (eventTypeDisplay)
+        eventTypeDisplay.innerText =
+            type.charAt(0).toUpperCase() + type.slice(1);
 
-    document.getElementById("eventDescription").value = "";
+    const eventDescriptionEl = document.getElementById("eventDescription");
+    if (eventDescriptionEl) eventDescriptionEl.value = "";
 
-    const eventModal = new bootstrap.Modal(
-        document.getElementById("eventModal")
-    );
-    eventModal.show();
+    const eventModalEl = document.getElementById("eventModal");
+    if (eventModalEl) {
+        const eventModal = new bootstrap.Modal(eventModalEl);
+        eventModal.show();
+    } else {
+        // Fallback: si le modal HTML n'existe pas (ex. build minimal), demander une description simple
+        const desc = prompt("Description (max 100 chars) :", "");
+        if (desc !== null) {
+            currentEventType = type;
+            // stocker temporairement dans le champ virtuel
+            if (eventDescriptionEl)
+                eventDescriptionEl.value = desc.substring(0, 100);
+            // store a fallback so confirmAndSendEvent can read it
+            window._promptedEventDescription = desc.substring(0, 100);
+            // appeler l'envoi immédiat
+            try {
+                confirmAndSendEvent();
+            } catch (e) {
+                console.debug("confirmAndSendEvent fallback failed", e);
+            }
+        }
+    }
 }
 
-document
-    .getElementById("confirmEventBtn")
-    .addEventListener("click", confirmAndSendEvent);
+const _confirmEventBtn = document.getElementById("confirmEventBtn");
+if (_confirmEventBtn)
+    _confirmEventBtn.addEventListener("click", confirmAndSendEvent);
 
 function confirmAndSendEvent() {
     const type = currentEventType;
-    const description = document
-        .getElementById("eventDescription")
-        .value.substring(0, 100);
+    const descEl = document.getElementById("eventDescription");
+    // support defensive fallback when the modal markup is not present
+    const description = descEl
+        ? descEl.value.substring(0, 100)
+        : window._promptedEventDescription || "";
 
-    const modal = bootstrap.Modal.getInstance(
-        document.getElementById("eventModal")
-    );
-    modal.hide();
+    console.debug("confirmAndSendEvent invoked", {
+        type,
+        description,
+        userLat,
+        userLon,
+    });
 
-    if (!userLat || !userLon || !type)
+    try {
+        const eventModalEl = document.getElementById("eventModal");
+        const modal = eventModalEl
+            ? bootstrap.Modal.getInstance(eventModalEl)
+            : null;
+        if (modal) modal.hide();
+    } catch (e) {
+        console.debug("no bootstrap modal instance to hide", e);
+    }
+
+    if (!Number.isFinite(userLat) || !Number.isFinite(userLon) || !type)
         return alert("Erreur de données ou de position.");
 
+    console.debug("sendEvent payload", {
+        type,
+        latitude: userLat,
+        longitude: userLon,
+        description,
+    });
     fetch("/events", {
         method: "POST",
         headers: {
@@ -164,11 +329,94 @@ function confirmAndSendEvent() {
             description: description,
         }),
     })
-        .then((res) => res.json())
+        .then((res) => {
+            return res.text().then((text) => {
+                if (!res.ok) {
+                    console.error("sendEvent server error", {
+                        status: res.status,
+                        statusText: res.statusText,
+                        text,
+                    });
+                    // Try to surface JSON error message if present
+                    try {
+                        const json = JSON.parse(text);
+                        if (json && json.error) {
+                            // show the server error to the user in the notification box
+                            showErrorMessage(json.error);
+                        }
+                    } catch (e) {}
+                    throw new Error("Server returned " + res.status);
+                }
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    console.error(
+                        "sendEvent parse error — response text:",
+                        text,
+                    );
+                    throw e;
+                }
+            });
+        })
         .then((data) => {
             if (data.error) return alert(data.error);
             alert(`Signalement ${type} envoyé avec succès !`);
+
+            // --- Ajouter immédiatement un marqueur local pour rendre le signalement visible ---
+            let tempId; // Déclarer tempId en dehors du try pour l'utiliser dans le deuxième try
+            try {
+                tempId = data.id || Date.now();
+                const tempEvent = {
+                    id: tempId,
+                    type: type,
+                    latitude: userLat,
+                    longitude: userLon,
+                    description: description,
+                    votes: [],
+                    expires_at: new Date(
+                        Date.now() + 1000 * 60 * 60,
+                    ).toISOString(),
+                };
+                // Ajouter aux données locales et dessiner un marqueur immédiat
+                eventsData.push(tempEvent);
+                const popupHtml =
+                    `${"<strong>"}${type.toUpperCase()}${"</strong>"}` +
+                    (description
+                        ? `<p>Détail: <em>${description}</em></p>`
+                        : "") +
+                    `<hr style="margin:5px 0;"><p class=\"mb-1\">Fiabilité: 👍 0 | 👎 0</p>`;
+                const tempMarker = L.marker([userLat, userLon], {
+                    icon: getIcon(type),
+                })
+                    .addTo(map)
+                    .bindPopup(popupHtml)
+                    .openPopup();
+                markers.push(tempMarker);
+                lastMaxEventId = Math.max(lastMaxEventId, tempId);
+            } catch (e) {
+                console.debug("create temporary marker failed", e);
+            }
+
+            // Enregistrer une notification côté client et afficher la liste
+            try {
+                const summary = `Signalement ${type}${
+                    description ? ": " + description : ""
+                }`;
+                addNotification(summary, tempId, userLat, userLon);
+                showNotification(1);
+            } catch (e) {
+                console.debug("notification add failed", e);
+            }
+
+            // Rafraîchir les événements en arrière-plan pour synchroniser avec le serveur
             refreshEventsAndCheckForNotifications();
+
+            // Demander la liste persistée des notifications côté serveur
+            try {
+                fetchNotifications();
+            } catch (e) {
+                console.debug("fetchNotifications call failed", e);
+            }
         })
         .catch((err) => console.error("sendEvent error", err));
 }
@@ -206,11 +454,11 @@ function refreshEventsAndCheckForNotifications(init = false) {
         .then((events) => {
             const now = new Date();
             const validEvents = events.filter(
-                (e) => new Date(e.expires_at) > now
+                (e) => new Date(e.expires_at) > now,
             );
             const maxId = validEvents.reduce(
                 (max, e) => Math.max(max, e.id || 0),
-                0
+                0,
             );
 
             if (init) {
@@ -222,9 +470,25 @@ function refreshEventsAndCheckForNotifications(init = false) {
 
             if (maxId > lastMaxEventId) {
                 const newCount = validEvents.filter(
-                    (e) => e.id > lastMaxEventId
+                    (e) => e.id > lastMaxEventId,
                 ).length;
                 if (newCount > 0) {
+                    const newEvents = validEvents.filter(
+                        (e) => e.id > lastMaxEventId,
+                    );
+                    newEvents.forEach((ne) => {
+                        const s = `${ne.type.toUpperCase()}${
+                            ne.description ? ": " + ne.description : ""
+                        }`;
+                        try {
+                            addNotification(
+                                s,
+                                ne.id,
+                                ne.latitude,
+                                ne.longitude,
+                            );
+                        } catch (e) {}
+                    });
                     notifCount += newCount;
                     showNotification(newCount);
                     lastMaxEventId = maxId;
@@ -247,7 +511,7 @@ function drawEvents() {
         const icon = getIcon(event.type);
         const up = (event.votes || []).filter((v) => v.type === "up").length;
         const down = (event.votes || []).filter(
-            (v) => v.type === "down"
+            (v) => v.type === "down",
         ).length;
 
         const descriptionHtml = event.description
@@ -257,7 +521,7 @@ function drawEvents() {
         let userVoteType = null;
         if (currentUserId !== null) {
             const userVote = (event.votes || []).find(
-                (v) => v.user_id == currentUserId
+                (v) => v.user_id == currentUserId,
             );
             if (userVote) {
                 userVoteType = userVote.type;
@@ -319,22 +583,283 @@ function toggleFilter(type) {
 // =========================================================================
 
 function showNotification(number) {
-    notifBadge.innerText = notifCount;
-    notifBox.innerText = `🔔 ${number} nouveau(x) signalement(s) !`;
-    notifBox.style.display = "block";
-    if (notifAudio) {
-        const p = notifAudio.play();
-        if (p !== undefined) p.catch(() => {});
+    if (notifBadge) notifBadge.innerText = notifCount;
+
+    // Vérifier si les alertes sonores sont activées dans localStorage
+    const soundEnabled = localStorage.getItem("soundAlerts") !== "false"; // Par défaut activé
+
+    // afficher un résumé temporaire si la pile est vide
+    if (!notificationStack.length) {
+        if (notifBox) {
+            notifBox.innerText = `🔔 ${number} nouveau(x) signalement(s) !`;
+            notifBox.style.display = "block";
+            setTimeout(() => {
+                if (notifBox) notifBox.style.display = "none";
+            }, 3000);
+        }
+        // Jouer le son seulement si les alertes sonores sont activées
+        if (notifAudio && soundEnabled) {
+            try {
+                const p = notifAudio.play();
+                if (p !== undefined)
+                    p.catch((err) => {
+                        console.debug("notif audio play error:", err);
+                    });
+            } catch (e) {
+                console.debug("notif audio error:", e);
+            }
+        }
+        return;
     }
-    setTimeout(() => {
-        notifBox.style.display = "none";
-    }, 4000);
+    // sinon afficher la liste
+    renderNotificationBox();
+    if (notifBox) notifBox.style.display = "block";
+    // Jouer le son seulement si les alertes sonores sont activées
+    if (notifAudio && soundEnabled) {
+        try {
+            const p = notifAudio.play();
+            if (p !== undefined)
+                p.catch((err) => {
+                    console.debug("notif audio play error:", err);
+                });
+        } catch (e) {
+            console.debug("notif audio error:", e);
+        }
+    }
+}
+
+// Affiche un message d'erreur temporaire dans la notification box (ne change pas le badge)
+function showErrorMessage(msg) {
+    try {
+        if (!notifBox) return alert(msg);
+        const prevBg = notifBox.style.background;
+        notifBox.innerText = `⚠️ ${msg}`;
+        notifBox.style.background = "#fff3cd";
+        notifBox.style.display = "block";
+        setTimeout(() => {
+            if (notifBox) {
+                notifBox.style.display = "none";
+                notifBox.style.background = prevBg || "";
+            }
+        }, 4000);
+    } catch (e) {
+        try {
+            alert(msg);
+        } catch (e) {}
+    }
 }
 
 function resetNotificationCount() {
     notifCount = 0;
-    notifBadge.innerText = 0;
+    if (notifBadge) notifBadge.innerText = 0;
 }
+
+// Stockage des notifications côté client (affichées dans #notification-box)
+let notificationStack = [];
+
+function addNotification(summary, eventId, lat, lon) {
+    console.debug("addNotification called", { summary, eventId, lat, lon });
+    notificationStack.unshift({
+        id: eventId || Date.now(),
+        summary: summary || "Nouveau signalement",
+        lat: lat || null,
+        lon: lon || null,
+        ts: Date.now(),
+    });
+    if (notificationStack.length > 20) notificationStack.pop();
+    notifCount = (notifCount || 0) + 1;
+    if (notifBadge) notifBadge.innerText = notifCount;
+    renderNotificationBox();
+}
+
+function renderNotificationBox() {
+    console.debug("renderNotificationBox called", {
+        notifBoxExists: !!notifBox,
+        stackLen: notificationStack.length,
+    });
+    if (!notifBox) {
+        console.debug("renderNotificationBox: notifBox is missing");
+        return;
+    }
+    if (!notificationStack.length) {
+        notifBox.innerHTML = "Aucune notification.";
+        console.debug("No notifications, showing 'Aucune notification.'");
+        return;
+    }
+
+    console.debug("Creating list with", notificationStack.length, "items");
+    const list = document.createElement("div");
+    list.style.maxWidth = "320px";
+    notificationStack.slice(0, 10).forEach((n, idx) => {
+        const item = document.createElement("div");
+        item.className = "notification-item";
+        item.style.padding = "8px 6px";
+        item.style.borderBottom = "1px solid rgba(0,0,0,0.06)";
+        item.style.cursor = "pointer";
+        const main = document.createElement("div");
+        main.style.fontWeight = 600;
+        main.style.lineHeight = "1.1";
+        main.innerText = n.summary || `Notification ${idx}`;
+
+        const time = document.createElement("div");
+        time.style.fontSize = "0.85rem";
+        time.style.color = "rgba(0,0,0,0.6)";
+        time.style.marginTop = "4px";
+        time.innerText = new Date(n.ts).toLocaleTimeString();
+
+        item.appendChild(main);
+        item.appendChild(time);
+        item.addEventListener("click", () => {
+            if (n.lat && n.lon) {
+                map.setView([n.lat, n.lon], 16, { animate: true });
+                const m = markers.find(
+                    (mk) =>
+                        mk.getLatLng().lat === n.lat &&
+                        mk.getLatLng().lng === n.lon,
+                );
+                if (m) m.openPopup();
+            }
+            if (notifBox) notifBox.style.display = "none";
+        });
+        list.appendChild(item);
+    });
+    notifBox.innerHTML = "";
+    notifBox.appendChild(list);
+    console.debug(
+        "Notification list rendered, notifBox innerHTML length:",
+        notifBox.innerHTML.length,
+    );
+}
+
+function toggleNotificationBox() {
+    console.debug("toggleNotificationBox called");
+    if (!notifBox) {
+        console.debug("toggleNotificationBox: notifBox is null");
+        return;
+    }
+
+    const currentComputed = window.getComputedStyle(notifBox);
+    console.debug("Current state:", {
+        style_display: notifBox.style.display,
+        computed_display: currentComputed.display,
+        computed_visibility: currentComputed.visibility,
+        computed_opacity: currentComputed.opacity,
+        offsetParent: notifBox.offsetParent !== null ? "visible" : "hidden",
+        clientHeight: notifBox.clientHeight,
+        innerHTML_len: notifBox.innerHTML.length,
+    });
+
+    if (notifBox.style.display === "block") {
+        console.debug("Hiding notification box");
+        notifBox.style.display = "none";
+        return;
+    }
+
+    console.debug("Rendering and showing notification box");
+    renderNotificationBox();
+
+    // Force display with multiple approaches
+    notifBox.style.display = "block";
+    notifBox.style.visibility = "visible";
+    notifBox.style.opacity = "1";
+
+    // Force reflow
+    void notifBox.offsetHeight;
+
+    const afterComputed = window.getComputedStyle(notifBox);
+    console.debug("After setting display:", {
+        style_display: notifBox.style.display,
+        computed_display: afterComputed.display,
+        computed_visibility: afterComputed.visibility,
+        computed_opacity: afterComputed.opacity,
+        offsetParent: notifBox.offsetParent !== null ? "visible" : "hidden",
+        clientHeight: notifBox.clientHeight,
+        innerHTML_len: notifBox.innerHTML.length,
+        innerHTML_first100: notifBox.innerHTML.substring(0, 100),
+    });
+
+    // Debug parent hierarchy
+    let parent = notifBox.parentElement;
+    let level = 0;
+    while (parent && level < 5) {
+        const pStyle = window.getComputedStyle(parent);
+        console.debug(`Parent level ${level}:`, {
+            tag: parent.tagName,
+            id: parent.id,
+            class: parent.className,
+            display: pStyle.display,
+            visibility: pStyle.visibility,
+            position: pStyle.position,
+            transform: pStyle.transform,
+            filter: pStyle.filter,
+            clipPath: pStyle.clipPath,
+            overflow: pStyle.overflow,
+            zIndex: pStyle.zIndex,
+        });
+        parent = parent.parentElement;
+        level++;
+    }
+
+    // Also check if body has any weird styles
+    const bodyStyle = window.getComputedStyle(document.body);
+    console.debug("BODY computed styles:", {
+        overflow: bodyStyle.overflow,
+        position: bodyStyle.position,
+        transform: bodyStyle.transform,
+        filter: bodyStyle.filter,
+        clipPath: bodyStyle.clipPath,
+    });
+}
+
+// Récupère les notifications persistées côté serveur et met à jour la pile cliente
+function fetchNotifications() {
+    try {
+        fetch("/notifications", {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+        })
+            .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+            .then((items) => {
+                if (!items || !items.length) {
+                    notificationStack = [];
+                    resetNotificationCount();
+                    return;
+                }
+                // Map server items to client stack format
+                notificationStack = items.slice(0, 50).map((n) => ({
+                    id: n.id,
+                    summary: n.message || n.summary || "Nouveau signalement",
+                    lat: null,
+                    lon: null,
+                    ts: n.created_at
+                        ? new Date(n.created_at).getTime()
+                        : Date.now(),
+                }));
+                notifCount = notificationStack.length || 0;
+                if (notifBadge) notifBadge.innerText = notifCount;
+                renderNotificationBox();
+            })
+            .catch((err) => {
+                console.debug("fetch /notifications failed", err);
+            });
+    } catch (e) {
+        console.debug("fetchNotifications error", e);
+    }
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+// Expose to global so inline onclick handlers work when using module build
+try {
+    window.toggleNotificationBox = toggleNotificationBox;
+} catch (e) {}
 
 // =========================================================================
 // MODE NUIT, ICONS & INIT POLLING
@@ -344,7 +869,12 @@ function getIcon(type) {
     let iconUrl = "";
     if (type === "accident") iconUrl = "/icons/accident.png";
     if (type === "embouteillage") iconUrl = "/icons/traffic.png";
-    if (type === "police") iconUrl = "/icons/police.png";
+    if (type === "police") iconUrl = "/icons/police.png"; // default
+    // fallback to .jpg if .png not present on the server
+    if (type === "police") {
+        // Use .jpg since repo contains police.jpg
+        iconUrl = "/icons/police.jpg";
+    }
     if (type === "danger") iconUrl = "/icons/danger.png";
     return L.icon({ iconUrl, iconSize: [30, 30] });
 }
@@ -436,6 +966,7 @@ function applyMapTheme() {
 }
 function updateDarkButton() {
     const btn = document.getElementById("darkModeBtn");
+    if (!btn) return;
     btn.innerHTML = document.body.classList.contains("dark")
         ? "☀️ Mode jour"
         : "🌙 Mode nuit";
@@ -458,6 +989,7 @@ window.onload = () => {
 };
 function createStars() {
     const starsContainer = document.getElementById("stars");
+    if (!starsContainer) return;
     starsContainer.innerHTML = "";
     for (let i = 0; i < 120; i++) {
         const star = document.createElement("div");
@@ -470,6 +1002,7 @@ function createStars() {
 }
 function handleNightAnimation() {
     const stars = document.getElementById("stars");
+    if (!stars) return;
     if (document.body.classList.contains("dark")) {
         stars.style.display = "block";
         createStars();
@@ -496,6 +1029,72 @@ document.addEventListener("click", function oneClick() {
     }
     document.removeEventListener("click", oneClick);
 });
+
+// Handlers de secours : assurent que Historique et Adresses Enregistrées fonctionnent
+(function attachMenuFallback() {
+    function tryAttach() {
+        const openSaved = document.getElementById("openSavedAddresses");
+        const savedBlock = document.getElementById("saved-addresses");
+        const historyBtn = document.getElementById("historyBtn");
+        const historyContainer = document.getElementById("search-history");
+
+        if (openSaved && savedBlock && !openSaved._attachedFallback) {
+            openSaved.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                console.log(
+                    "Fallback: ADRESSES CLIQUÉES - before d-none:",
+                    savedBlock.classList.contains("d-none"),
+                    "display:",
+                    window.getComputedStyle(savedBlock).display,
+                );
+                savedBlock.classList.toggle("d-none");
+                if (!savedBlock.classList.contains("d-none")) {
+                    try {
+                        renderFavorites();
+                    } catch (e) {
+                        console.error("renderFavorites error", e);
+                    }
+                    if (window.getComputedStyle(savedBlock).display === "none")
+                        if (savedBlock) savedBlock.style.display = "block";
+                }
+            });
+            openSaved._attachedFallback = true;
+        }
+
+        if (historyBtn && historyContainer && !historyBtn._attachedFallback) {
+            historyBtn.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                console.log(
+                    "Fallback: HISTORIQUE CLIQUÉ - before d-none:",
+                    historyContainer.classList.contains("d-none"),
+                    "display:",
+                    window.getComputedStyle(historyContainer).display,
+                );
+                historyContainer.classList.toggle("d-none");
+                if (!historyContainer.classList.contains("d-none")) {
+                    try {
+                        renderHistory();
+                    } catch (e) {
+                        console.error("renderHistory error", e);
+                    }
+                    if (
+                        window.getComputedStyle(historyContainer).display ===
+                        "none"
+                    )
+                        if (historyContainer)
+                            historyContainer.style.display = "block";
+                }
+            });
+            historyBtn._attachedFallback = true;
+        }
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", tryAttach);
+    } else {
+        tryAttach();
+    }
+})();
 
 // =====================================================
 // ✅ NAVIGATION TYPE WAZE (MIS À JOUR AVEC travelMode)
@@ -531,18 +1130,77 @@ document.addEventListener("DOMContentLoaded", () => {
     notifBadge = document.getElementById("notif-badge");
     notifAudio = document.getElementById("notif-sound");
 
+    // Débloquer l'audio au premier clic/toucher (nécessaire pour les navigateurs modernes)
+    const unlockAudio = () => {
+        if (notifAudio) {
+            notifAudio.play().catch(() => {});
+            notifAudio.pause();
+        }
+        document.removeEventListener("click", unlockAudio);
+        document.removeEventListener("touchstart", unlockAudio);
+    };
+    document.addEventListener("click", unlockAudio);
+    document.addEventListener("touchstart", unlockAudio);
+
     // Carte et données
     map = L.map("map").setView([5.348, -4.027], 13);
+    // Exposer la référence de la carte sur window pour les scripts inline (blade)
+    try {
+        window.map = map;
+    } catch (e) {}
     lightLayer = L.tileLayer(
         "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        { attribution: "© OpenStreetMap" }
+        {
+            attribution: "© OpenStreetMap",
+            maxZoom: 19,
+            crossOrigin: true,
+            errorTileUrl:
+                "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+        },
     );
     darkLayer = L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        { attribution: "© OpenStreetMap" }
+        {
+            attribution: "© OpenStreetMap",
+            maxZoom: 19,
+            crossOrigin: true,
+            errorTileUrl:
+                "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+        },
     );
     lightLayer.addTo(map);
-    // ========================================================
+
+    // Si la géolocalisation a déjà retourné une position avant l'init de la carte,
+    // appliquer maintenant la vue et effectuer le rafraîchissement initial.
+    if (userLat && userLon) {
+        try {
+            map.setView([userLat, userLon], 15);
+            updateMapLocation(userLat, userLon, lastHeading ?? null);
+        } catch (e) {
+            console.debug("apply saved user position failed", e);
+        }
+    }
+    if (needInitialRefresh) {
+        try {
+            refreshEventsAndCheckForNotifications(true);
+            needInitialRefresh = false;
+        } catch (e) {
+            console.debug("initial refresh deferred", e);
+        }
+    }
+
+    // =========================================================================
+    // INITIALISER LE GESTIONNAIRE DE TRAFIC TOMTOM
+    // =========================================================================
+    try {
+        if (window.TomTomTrafficManager) {
+            window.tomTomTrafficManager = new TomTomTrafficManager(map);
+            TomTomTrafficManager.exposeToWindow();
+            console.log("✅ TomTom Traffic Manager initialized");
+        }
+    } catch (error) {
+        console.error("❌ Error initializing TomTom Traffic Manager:", error);
+    }
 
     // Ajouter les animations CSS
     const style = document.createElement("style");
@@ -579,6 +1237,8 @@ document.addEventListener("DOMContentLoaded", () => {
         navbarDiv.prepend(navBtn);
     }
 
+    // Traffic UI and logic removed to avoid conflicts with menu visibility
+
     // Bouton recentrer : on l'ajoute toujours au body (évite qu'il disparaisse si aucune navbar)
     if (!document.getElementById("recenterBtn")) {
         const recenterBtn = document.createElement("button");
@@ -600,767 +1260,483 @@ document.addEventListener("DOMContentLoaded", () => {
         };
         // placer le bouton en position fixe au-dessus de la carte (append au body)
         document.body.appendChild(recenterBtn);
+    } else {
+        // si le bouton existe déjà dans le DOM (blade), attacher le handler
+        const existingRecenter = document.getElementById("recenterBtn");
+        if (existingRecenter) {
+            existingRecenter.addEventListener("click", function () {
+                mapIsTrackingUser = true;
+                if (userLat && userLon && map)
+                    map.setView([userLat, userLon], map.getZoom(), {
+                        animate: true,
+                    });
+            });
+        }
     }
 
-    // 🗺️ Utiliser le CONTRÔLE FLOTTANT WAZE/GOOGLE MAPS déjà dans le HTML (blade)
-    // Get references to search elements from blade HTML
-    {
-        const searchInput = document.getElementById("search-input");
-        const searchResults = document.getElementById("search-results");
-        let searchIconBtn = document.querySelector(
-            "#map-controls .map-control-btn.search-icon"
-        );
-        let micBtn = document.querySelector(
-            "#map-controls .map-control-btn.mic"
-        );
+    // Attacher le listener de notifications au bouton de la navbar
+    try {
+        const notifBtnEl = document.getElementById("notifBtn");
+        if (notifBtnEl) {
+            try {
+                notifBtnEl.removeAttribute("onclick");
+            } catch (e) {}
+            notifBtnEl.addEventListener("click", toggleNotificationBox);
+        }
+    } catch (e) {
+        console.debug("attach notifBtn handler failed", e);
+    }
 
-        const mapControls = document.getElementById("map-controls");
+    // ============================================================
+    // SEARCH FUNCTIONS & HELPERS (DEFINED GLOBALLY EARLY AS STUBS)
+    // ============================================================
+    // Define stub versions first so they're always accessible on window
+    // They'll be overwritten if/when DOM elements exist
 
-        if (!searchInput || !searchResults) {
-            console.warn("Search elements not found in HTML");
+    window.performSearch = async (q) => {
+        console.warn("performSearch: DOM elements not initialized");
+        return [];
+    };
+    window.doSearch = () => {
+        console.warn("doSearch: DOM elements not initialized");
+    };
+    window.renderFavorites = async () => {
+        console.warn("renderFavorites: DOM elements not initialized");
+    };
+    window.renderHistory = () => {
+        console.warn("renderHistory: DOM elements not initialized");
+    };
+    window.addCurrentFavorite = async () => {
+        console.warn("addCurrentFavorite: DOM elements not initialized");
+    };
+    window.loadFavorites = () => {
+        console.warn("loadFavorites: DOM elements not initialized");
+        return [];
+    };
+    window.loadHistory = async () => {
+        console.warn("loadHistory: DOM elements not initialized");
+    };
+
+    // Initialize these as null — they'll be set if DOM elements exist
+    let searchIconBtn = null;
+    let micBtn = null;
+    let searchInput = null;
+    let searchResults = null;
+    let mapControls = null;
+
+    // Try to assign them if they exist in the DOM (we're already inside DOMContentLoaded)
+    searchInput = searchInput || document.getElementById("search-input");
+    searchResults = searchResults || document.getElementById("search-results");
+    // Fallbacks pour différents templates / IDs
+    searchIconBtn =
+        searchIconBtn ||
+        document.querySelector("#map-controls .map-control-btn.search-icon") ||
+        document.getElementById("searchIconBtn") ||
+        document.querySelector(".map-control-btn.search-icon");
+    micBtn =
+        micBtn ||
+        document.querySelector("#map-controls .map-control-btn.mic") ||
+        document.getElementById("micBtn") ||
+        document.querySelector(".map-control-btn.mic");
+    mapControls =
+        mapControls ||
+        document.getElementById("map-controls") ||
+        document.getElementById("search-compact");
+
+    function debounce(fn, delay = 300) {
+        let t = null;
+        return (...args) => {
+            clearTimeout(t);
+            t = setTimeout(() => fn(...args), delay);
+        };
+    }
+
+    async function performSearch(q) {
+        if (!q || q.trim().length < 2) return [];
+        // Limiter les recherches à la Côte d'Ivoire (viewbox: SW-NE corners)
+        const viewbox = `-8.6,4.3,-2.4,10.7`; // Côte d'Ivoire bounding box
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
+            q,
+        )}&addressdetails=1&limit=8&countrycodes=ci&viewbox=${viewbox}&bounded=1`;
+        try {
+            const res = await fetch(url, {
+                headers: { Accept: "application/json" },
+            });
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data;
+        } catch (e) {
+            console.debug("search error", e);
+            return [];
+        }
+    }
+
+    // -----------------------------
+    // Search history (localStorage)
+    // -----------------------------
+    const HISTORY_KEY = "naviwaze_search_history_v1";
+    let searchHistory = [];
+
+    async function loadHistory() {
+        if (currentUserId) {
+            try {
+                const res = await fetch("/search-history", {
+                    method: "GET",
+                    credentials: "same-origin",
+                    headers: { Accept: "application/json" },
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    searchHistory = data.map((d) => ({
+                        name: d.name,
+                        lat: parseFloat(d.lat),
+                        lon: parseFloat(d.lon),
+                    }));
+                    return;
+                }
+            } catch (e) {
+                console.debug("load history error", e);
+            }
+        }
+        try {
+            window.loadHistory = loadHistory;
+        } catch (e) {}
+        // fallback to localStorage
+        try {
+            const raw = localStorage.getItem(HISTORY_KEY);
+            searchHistory = raw ? JSON.parse(raw) : [];
+        } catch (e) {
+            searchHistory = [];
+        }
+    }
+
+    function saveHistory() {
+        // server-side users are saved on each add, so local save only for anonymous users
+        if (currentUserId) return;
+        try {
+            localStorage.setItem(
+                HISTORY_KEY,
+                JSON.stringify(searchHistory.slice(0, 50)),
+            );
+        } catch (e) {
+            console.debug("save history error", e);
+        }
+    }
+
+    async function addToHistory(item) {
+        if (!item || !item.name) return;
+        // server-backed for authenticated users
+        if (currentUserId) {
+            try {
+                await fetch("/search-history", {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: {
+                        "X-CSRF-TOKEN": csrf,
+                        "Content-Type": "application/json",
+                        Accept: "application/json",
+                    },
+                    body: JSON.stringify({
+                        name: item.name,
+                        lat: item.lat,
+                        lon: item.lon,
+                    }),
+                });
+            } catch (e) {
+                console.debug("history post error", e);
+            }
+            // reload from server to keep in sync
+            await loadHistory();
+            renderHistory();
             return;
         }
 
-        // ============================================================
-        // SEARCH FUNCTIONS (NOMINATIM)
-        // ============================================================
+        // local fallback
+        searchHistory = searchHistory.filter(
+            (h) =>
+                !(
+                    h.name === item.name &&
+                    h.lat === item.lat &&
+                    h.lon === item.lon
+                ),
+        );
+        searchHistory.unshift(item);
+        if (searchHistory.length > 50) searchHistory.length = 50;
+        saveHistory();
+        renderHistory();
+    }
 
-        function debounce(fn, delay = 300) {
-            let t = null;
-            return (...args) => {
-                clearTimeout(t);
-                t = setTimeout(() => fn(...args), delay);
-            };
+    function renderHistory() {
+        const historyList = document.getElementById("history-list");
+        if (!historyList) return;
+        historyList.innerHTML = "";
+        if (!searchHistory || searchHistory.length === 0) {
+            historyList.innerHTML =
+                '<div class="text-muted small">Aucun historique</div>';
+            return;
         }
+        searchHistory.forEach((h) => {
+            const item = document.createElement("div");
+            item.className =
+                "list-group-item d-flex justify-content-between align-items-center history-item";
 
-        async function performSearch(q) {
-            if (!q || q.trim().length < 2) return [];
-            // Limiter les recherches à la Côte d'Ivoire (viewbox: SW-NE corners)
-            const viewbox = `-8.6,4.3,-2.4,10.7`; // Côte d'Ivoire bounding box
-            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
-                q
-            )}&addressdetails=1&limit=8&countrycodes=ci&viewbox=${viewbox}&bounded=1`;
-            try {
-                const res = await fetch(url, {
-                    headers: { Accept: "application/json" },
-                });
-                if (!res.ok) return [];
-                const data = await res.json();
-                return data;
-            } catch (e) {
-                console.debug("search error", e);
-                return [];
-            }
-        }
+            const left = document.createElement("div");
+            left.className = "d-flex align-items-center gap-2";
 
-        // -----------------------------
-        // Search history (localStorage)
-        // -----------------------------
-        const HISTORY_KEY = "naviwaze_search_history_v1";
-        let searchHistory = [];
-
-        async function loadHistory() {
-            if (currentUserId) {
+            // delete button (placed before the text)
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "history-delete-btn";
+            delBtn.title = "Supprimer";
+            delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            delBtn.addEventListener("click", async (ev) => {
+                ev.stopPropagation();
+                if (!h.id) {
+                    // local-only history (no server id)
+                    searchHistory = searchHistory.filter((s) => s !== h);
+                    saveHistory();
+                    renderHistory();
+                    return;
+                }
                 try {
-                    const res = await fetch("/search-history", {
-                        method: "GET",
+                    const res = await fetch(`/search-history/${h.id}`, {
+                        method: "DELETE",
                         credentials: "same-origin",
-                        headers: { Accept: "application/json" },
+                        headers: { "X-CSRF-TOKEN": csrf },
                     });
                     if (res.ok) {
-                        const data = await res.json();
-                        searchHistory = data.map((d) => ({
-                            name: d.name,
-                            lat: parseFloat(d.lat),
-                            lon: parseFloat(d.lon),
-                        }));
-                        return;
-                    }
-                } catch (e) {
-                    console.debug("load history error", e);
-                }
-            }
-            // fallback to localStorage
-            try {
-                const raw = localStorage.getItem(HISTORY_KEY);
-                searchHistory = raw ? JSON.parse(raw) : [];
-            } catch (e) {
-                searchHistory = [];
-            }
-        }
-
-        function saveHistory() {
-            // server-side users are saved on each add, so local save only for anonymous users
-            if (currentUserId) return;
-            try {
-                localStorage.setItem(
-                    HISTORY_KEY,
-                    JSON.stringify(searchHistory.slice(0, 50))
-                );
-            } catch (e) {
-                console.debug("save history error", e);
-            }
-        }
-
-        async function addToHistory(item) {
-            if (!item || !item.name) return;
-            // server-backed for authenticated users
-            if (currentUserId) {
-                try {
-                    await fetch("/search-history", {
-                        method: "POST",
-                        credentials: "same-origin",
-                        headers: {
-                            "X-CSRF-TOKEN": csrf,
-                            "Content-Type": "application/json",
-                            Accept: "application/json",
-                        },
-                        body: JSON.stringify({
-                            name: item.name,
-                            lat: item.lat,
-                            lon: item.lon,
-                        }),
-                    });
-                } catch (e) {
-                    console.debug("history post error", e);
-                }
-                // reload from server to keep in sync
-                await loadHistory();
-                renderHistory();
-                return;
-            }
-
-            // local fallback
-            searchHistory = searchHistory.filter(
-                (h) =>
-                    !(
-                        h.name === item.name &&
-                        h.lat === item.lat &&
-                        h.lon === item.lon
-                    )
-            );
-            searchHistory.unshift(item);
-            if (searchHistory.length > 50) searchHistory.length = 50;
-            saveHistory();
-            renderHistory();
-        }
-
-        function renderHistory() {
-            const historyList = document.getElementById("history-list");
-            if (!historyList) return;
-            historyList.innerHTML = "";
-            if (!searchHistory || searchHistory.length === 0) {
-                historyList.innerHTML =
-                    '<div class="text-muted small">Aucun historique</div>';
-                return;
-            }
-            searchHistory.forEach((h) => {
-                const item = document.createElement("div");
-                item.className =
-                    "list-group-item d-flex justify-content-between align-items-center history-item";
-
-                const left = document.createElement("div");
-                left.className = "d-flex align-items-center gap-2";
-
-                // delete button (placed before the text)
-                const delBtn = document.createElement("button");
-                delBtn.type = "button";
-                delBtn.className = "history-delete-btn";
-                delBtn.title = "Supprimer";
-                delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                delBtn.addEventListener("click", async (ev) => {
-                    ev.stopPropagation();
-                    if (!h.id) {
-                        // local-only history (no server id)
-                        searchHistory = searchHistory.filter((s) => s !== h);
-                        saveHistory();
+                        await loadHistory();
                         renderHistory();
-                        return;
+                    } else {
+                        console.debug("delete history failed", res.status);
                     }
-                    try {
-                        const res = await fetch(`/search-history/${h.id}`, {
-                            method: "DELETE",
-                            credentials: "same-origin",
-                            headers: { "X-CSRF-TOKEN": csrf },
-                        });
-                        if (res.ok) {
-                            await loadHistory();
-                            renderHistory();
-                        } else {
-                            console.debug("delete history failed", res.status);
-                        }
-                    } catch (e) {
-                        console.debug("delete history error", e);
-                    }
-                });
-
-                const textBtn = document.createElement("button");
-                textBtn.type = "button";
-                textBtn.className =
-                    "btn btn-link p-0 text-start flex-grow-1 history-open-btn";
-                textBtn.style = "text-decoration: none; color: inherit;";
-                textBtn.innerText = h.name;
-                textBtn.addEventListener("click", () => {
-                    setDestination(h.lat, h.lon);
-                    const sb = document.getElementById("left-sidebar");
-                    if (sb) sb.classList.remove("open");
-                });
-
-                left.appendChild(delBtn);
-                left.appendChild(textBtn);
-
-                const meta = document.createElement("small");
-                meta.className = "text-muted ms-2 d-none d-md-inline";
-                meta.innerText = h.date || "";
-
-                item.appendChild(left);
-                item.appendChild(meta);
-                historyList.appendChild(item);
-            });
-        }
-
-        /* ===== Adresses enregistrées (favorites) ===== */
-        function loadFavorites() {
-            const raw = localStorage.getItem("lw_favorites");
-            try {
-                return raw ? JSON.parse(raw) : [];
-            } catch (e) {
-                console.debug("favorites parse error", e);
-                return [];
-            }
-        }
-
-        function saveFavorites(list) {
-            localStorage.setItem("lw_favorites", JSON.stringify(list || []));
-        }
-        async function fetchServerFavorites() {
-            try {
-                const res = await fetch("/favorites", {
-                    credentials: "same-origin",
-                    headers: { Accept: "application/json" },
-                });
-                if (!res.ok) return [];
-                const data = await res.json();
-                return data.map((d) => ({
-                    id: d.id,
-                    name: d.name,
-                    type: d.type,
-                    lat: parseFloat(d.latitude),
-                    lon: parseFloat(d.longitude),
-                    created_at: d.created_at,
-                }));
-            } catch (e) {
-                console.debug("fetchServerFavorites error", e);
-                return [];
-            }
-        }
-
-        async function renderFavorites() {
-            const favList = document.getElementById("favorites-list");
-            if (!favList) return;
-            let items = [];
-            if (currentUserId) {
-                items = await fetchServerFavorites();
-            } else {
-                items = loadFavorites();
-            }
-            favList.innerHTML = "";
-            if (!items || items.length === 0) {
-                favList.innerHTML =
-                    '<div class="text-muted small">Aucune adresse enregistrée</div>';
-                return;
-            }
-            items.forEach((f) => {
-                const item = document.createElement("div");
-                item.className =
-                    "list-group-item d-flex align-items-center justify-content-between";
-
-                const left = document.createElement("div");
-                left.className = "d-flex align-items-center gap-2";
-
-                const icon = document.createElement("i");
-                icon.className =
-                    f.type === "home"
-                        ? "fa-solid fa-house"
-                        : f.type === "work"
-                        ? "fa-solid fa-briefcase"
-                        : "fa-solid fa-school";
-                icon.style.width = "26px";
-                icon.style.textAlign = "center";
-
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = "btn btn-link p-0 text-start flex-grow-1";
-                btn.style = "text-decoration: none; color: inherit;";
-                btn.innerText =
-                    f.name ||
-                    `${f.type} (${(f.lat || 0).toFixed(5)}, ${(
-                        f.lon || 0
-                    ).toFixed(5)})`;
-                btn.addEventListener("click", () => {
-                    setDestination(f.lat, f.lon);
-                    const sb = document.getElementById("left-sidebar");
-                    if (sb) sb.classList.remove("open");
-                });
-
-                left.appendChild(icon);
-                left.appendChild(btn);
-
-                const right = document.createElement("div");
-                right.className = "d-flex gap-1 align-items-center";
-
-                const del = document.createElement("button");
-                del.type = "button";
-                del.className = "history-delete-btn";
-                del.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                del.title = "Supprimer";
-                del.addEventListener("click", async (ev) => {
-                    ev.stopPropagation();
-                    if (currentUserId && f.id) {
-                        try {
-                            await fetch(`/favorites/${f.id}`, {
-                                method: "DELETE",
-                                credentials: "same-origin",
-                                headers: { "X-CSRF-TOKEN": csrf },
-                            });
-                            await renderFavorites();
-                            return;
-                        } catch (e) {
-                            console.debug("delete favorite error", e);
-                        }
-                    }
-                    const remaining = loadFavorites().filter(
-                        (x) => x.id !== f.id
-                    );
-                    saveFavorites(remaining);
-                    await renderFavorites();
-                });
-
-                right.appendChild(del);
-
-                item.appendChild(left);
-                item.appendChild(right);
-                favList.appendChild(item);
-            });
-        }
-
-        async function addCurrentFavorite() {
-            const type =
-                document.getElementById("favoriteType")?.value || "home";
-            let lat = userLat || null;
-            let lon = userLon || null;
-
-            // Fallback to map center if geolocation unavailable
-            if (
-                (!lat || !lon) &&
-                typeof map !== "undefined" &&
-                map &&
-                map.getCenter
-            ) {
-                const c = map.getCenter();
-                lat = c.lat;
-                lon = c.lng;
-                console.debug(
-                    "Using map center as fallback for favorite",
-                    lat,
-                    lon
-                );
-            }
-
-            if (!lat || !lon) {
-                alert(
-                    "Position non disponible. Autorisez la géolocalisation ou recentrez la carte."
-                );
-                return;
-            }
-
-            const defaultName =
-                type === "home"
-                    ? "Maison"
-                    : type === "work"
-                    ? "Travail"
-                    : "École";
-            // Use modal instead of prompt
-            const favModalEl = document.getElementById("favoriteNameModal");
-            const favInput = document.getElementById("favoriteNameInput");
-            if (favInput) favInput.value = defaultName;
-            const favModal = new bootstrap.Modal(favModalEl);
-            favModal.show();
-
-            // Wait for user confirmation via modal button
-            const namePromise = new Promise((resolve) => {
-                const confirmBtn = document.getElementById(
-                    "favoriteNameConfirm"
-                );
-                function onConfirm() {
-                    const val =
-                        favInput && favInput.value.trim()
-                            ? favInput.value.trim()
-                            : defaultName;
-                    resolve(val);
-                    confirmBtn.removeEventListener("click", onConfirm);
-                    favModal.hide();
-                }
-                confirmBtn.addEventListener("click", onConfirm);
-            });
-            const name = await namePromise;
-
-            // If logged in, persist server-side
-            if (currentUserId) {
-                try {
-                    const payload = {
-                        name,
-                        type,
-                        latitude: Number(lat),
-                        longitude: Number(lon),
-                    };
-                    await fetch("/favorites", {
-                        method: "POST",
-                        credentials: "same-origin",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-CSRF-TOKEN": csrf,
-                            Accept: "application/json",
-                        },
-                        body: JSON.stringify(payload),
-                    });
-                    await renderFavorites();
-                    alert("Adresse enregistrée (serveur).");
-                    return;
                 } catch (e) {
-                    console.debug("favorite post error", e);
+                    console.debug("delete history error", e);
                 }
-            }
+            });
 
-            const list = loadFavorites();
-            const entry = {
-                id: Date.now(),
-                name,
-                type,
-                lat: Number(lat),
-                lon: Number(lon),
-                created_at: new Date().toISOString(),
-            };
-            list.unshift(entry);
-            saveFavorites(list);
-            await renderFavorites();
-            try {
-                renderFavoriteMarkers();
-            } catch (e) {}
-            alert("Adresse enregistrée.");
-        }
+            const textBtn = document.createElement("button");
+            textBtn.type = "button";
+            textBtn.className =
+                "btn btn-link p-0 text-start flex-grow-1 history-open-btn";
+            textBtn.style = "text-decoration: none; color: inherit;";
+            textBtn.innerText = h.name;
+            textBtn.addEventListener("click", () => {
+                setDestination(h.lat, h.lon);
+                const sb = document.getElementById("left-sidebar");
+                if (sb) sb.classList.remove("open");
+            });
 
-        // Hook favorites UI after DOM ready
-        document.addEventListener("DOMContentLoaded", function () {
-            const openSaved = document.getElementById("openSavedAddresses");
-            const savedBlock = document.getElementById("saved-addresses");
-            if (openSaved && savedBlock) {
-                openSaved.addEventListener("click", function (ev) {
-                    ev.preventDefault();
-                    // toggle
-                    if (savedBlock.classList.contains("d-none"))
-                        savedBlock.classList.remove("d-none");
-                    else savedBlock.classList.add("d-none");
-                    renderFavorites();
-                });
-            }
-            const addFavBtn = document.getElementById("add-current-favorite");
-            if (addFavBtn)
-                addFavBtn.addEventListener("click", addCurrentFavorite);
-            // render if block visible
-            if (savedBlock && !savedBlock.classList.contains("d-none"))
-                renderFavorites();
-            // render favorite markers initially
-            try {
-                renderFavoriteMarkers();
-            } catch (e) {}
+            left.appendChild(delBtn);
+            left.appendChild(textBtn);
+
+            const meta = document.createElement("small");
+            meta.className = "text-muted ms-2 d-none d-md-inline";
+            meta.innerText = h.date || "";
+
+            item.appendChild(left);
+            item.appendChild(meta);
+            historyList.appendChild(item);
         });
+        // exposer pour le code inline (blade)
+        try {
+            window.renderHistory = renderHistory;
+        } catch (e) {}
+    }
 
-        // initialise history
-        loadHistory();
-        renderHistory();
-
-        // Hook up sidebar history controls (buttons inside blade)
-        const historyBtn = document.getElementById("historyBtn");
-        const historyContainer = document.getElementById("search-history");
-        const clearHistoryBtn = document.getElementById("clear-history");
-        if (historyBtn && historyContainer) {
-            historyBtn.addEventListener("click", function () {
-                const open = !historyContainer.classList.contains("d-none");
-                if (open) {
-                    historyContainer.classList.add("d-none");
-                } else {
-                    historyContainer.classList.remove("d-none");
-                    renderHistory();
-                }
-            });
+    /* ===== Adresses enregistrées (favorites) ===== */
+    function loadFavorites() {
+        const raw = localStorage.getItem("lw_favorites");
+        try {
+            return raw ? JSON.parse(raw) : [];
+        } catch (e) {
+            console.debug("favorites parse error", e);
+            return [];
         }
-        if (clearHistoryBtn) {
-            clearHistoryBtn.addEventListener("click", async function () {
-                if (currentUserId) {
+    }
+    try {
+        window.loadFavorites = loadFavorites;
+    } catch (e) {}
+
+    function saveFavorites(list) {
+        localStorage.setItem("lw_favorites", JSON.stringify(list || []));
+    }
+    async function fetchServerFavorites() {
+        try {
+            const res = await fetch("/favorites", {
+                credentials: "same-origin",
+                headers: { Accept: "application/json" },
+            });
+            if (!res.ok) return [];
+            const data = await res.json();
+            return data.map((d) => ({
+                id: d.id,
+                name: d.name,
+                type: d.type,
+                lat: parseFloat(d.latitude),
+                lon: parseFloat(d.longitude),
+                created_at: d.created_at,
+            }));
+        } catch (e) {
+            console.debug("fetchServerFavorites error", e);
+            return [];
+        }
+    }
+
+    async function renderFavorites() {
+        const favList = document.getElementById("favorites-list");
+        if (!favList) return;
+        let items = [];
+        if (currentUserId) {
+            items = await fetchServerFavorites();
+        } else {
+            items = loadFavorites();
+        }
+        favList.innerHTML = "";
+        if (!items || items.length === 0) {
+            favList.innerHTML =
+                '<div class="text-muted small">Aucune adresse enregistrée</div>';
+            return;
+        }
+        items.forEach((f) => {
+            const item = document.createElement("div");
+            item.className =
+                "list-group-item d-flex align-items-center justify-content-between";
+
+            const left = document.createElement("div");
+            left.className = "d-flex align-items-center gap-2";
+
+            const icon = document.createElement("i");
+            icon.className =
+                f.type === "home"
+                    ? "fa-solid fa-house"
+                    : f.type === "work"
+                      ? "fa-solid fa-briefcase"
+                      : "fa-solid fa-school";
+            icon.style.width = "26px";
+            icon.style.textAlign = "center";
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn btn-link p-0 text-start flex-grow-1";
+            btn.style = "text-decoration: none; color: inherit;";
+            btn.innerText =
+                f.name ||
+                `${f.type} (${(f.lat || 0).toFixed(5)}, ${(f.lon || 0).toFixed(
+                    5,
+                )})`;
+            btn.addEventListener("click", () => {
+                setDestination(f.lat, f.lon);
+                const sb = document.getElementById("left-sidebar");
+                if (sb) sb.classList.remove("open");
+            });
+
+            left.appendChild(icon);
+            left.appendChild(btn);
+
+            const right = document.createElement("div");
+            right.className = "d-flex gap-1 align-items-center";
+
+            const del = document.createElement("button");
+            del.type = "button";
+            del.className = "history-delete-btn";
+            del.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            del.title = "Supprimer";
+            del.addEventListener("click", async (ev) => {
+                ev.stopPropagation();
+                if (currentUserId && f.id) {
                     try {
-                        await fetch("/search-history", {
+                        await fetch(`/favorites/${f.id}`, {
                             method: "DELETE",
                             credentials: "same-origin",
                             headers: { "X-CSRF-TOKEN": csrf },
                         });
+                        await renderFavorites();
+                        return;
                     } catch (e) {
-                        console.debug("clear history error", e);
+                        console.debug("delete favorite error", e);
                     }
-                    await loadHistory();
-                    renderHistory();
-                    return;
                 }
-                searchHistory = [];
-                saveHistory();
-                renderHistory();
+                const remaining = loadFavorites().filter((x) => x.id !== f.id);
+                saveFavorites(remaining);
+                await renderFavorites();
             });
+
+            right.appendChild(del);
+
+            item.appendChild(left);
+            item.appendChild(right);
+            favList.appendChild(item);
+        });
+        try {
+            window.renderFavorites = renderFavorites;
+        } catch (e) {}
+    }
+
+    async function addCurrentFavorite() {
+        const type = document.getElementById("favoriteType")?.value || "home";
+        let lat = userLat || null;
+        let lon = userLon || null;
+
+        // Fallback to map center if geolocation unavailable
+        if (
+            (!lat || !lon) &&
+            typeof map !== "undefined" &&
+            map &&
+            map.getCenter
+        ) {
+            const c = map.getCenter();
+            lat = c.lat;
+            lon = c.lng;
+            console.debug(
+                "Using map center as fallback for favorite",
+                lat,
+                lon,
+            );
         }
 
-        function showResults(items) {
-            searchResults.innerHTML = "";
-            if (!items || items.length === 0) {
-                searchResults.classList.add("d-none");
-                return;
-            }
-            items.forEach((it) => {
-                const div = document.createElement("div");
-                div.className = "search-item";
-                div.innerHTML = `<i class="fa-solid fa-location-dot"></i><span>${
-                    it.display_name || it.name || ""
-                }</span>`;
-                div.onclick = () => {
-                    const lat = parseFloat(it.lat);
-                    const lon = parseFloat(it.lon);
-                    setDestination(lat, lon);
-                    searchResults.classList.add("d-none");
-                    searchInput.value = it.display_name || "";
-                    // store selection in history
-                    try {
-                        addToHistory({
-                            name: it.display_name || it.name || "",
-                            lat,
-                            lon,
-                        });
-                    } catch (e) {
-                        console.debug("history add error", e);
-                    }
-                };
-                searchResults.appendChild(div);
-            });
-            searchResults.classList.remove("d-none");
+        if (!lat || !lon) {
+            alert(
+                "Position non disponible. Autorisez la géolocalisation ou recentrez la carte.",
+            );
+            return;
         }
 
-        const doSearch = debounce(async (ev) => {
-            const q = searchInput.value.trim();
-            if (q.length < 2) {
-                searchResults.classList.add("d-none");
-                return;
+        const defaultName =
+            type === "home" ? "Maison" : type === "work" ? "Travail" : "École";
+        // Use modal instead of prompt
+        const favModalEl = document.getElementById("favoriteNameModal");
+        const favInput = document.getElementById("favoriteNameInput");
+        if (favInput) favInput.value = defaultName;
+        const favModal = new bootstrap.Modal(favModalEl);
+        favModal.show();
+
+        // Wait for user confirmation via modal button
+        const namePromise = new Promise((resolve) => {
+            const confirmBtn = document.getElementById("favoriteNameConfirm");
+            function onConfirm() {
+                const val =
+                    favInput && favInput.value.trim()
+                        ? favInput.value.trim()
+                        : defaultName;
+                resolve(val);
+                confirmBtn.removeEventListener("click", onConfirm);
+                favModal.hide();
             }
-            const items = await performSearch(q);
-            showResults(items);
-        }, 300);
+            confirmBtn.addEventListener("click", onConfirm);
+        });
+        const name = await namePromise;
 
-        // Comportement des boutons
-        searchIconBtn.onclick = () => {
-            searchInput.focus();
-            doSearch();
-        };
-
-        // Reconnaissance vocale simple (toggle) avec fallback si non supportée
-        let speechRecognition = null;
-        let speechListening = false;
-        function toggleVoiceSearch() {
-            const SR =
-                window.SpeechRecognition ||
-                window.webkitSpeechRecognition ||
-                window.mozSpeechRecognition ||
-                window.msSpeechRecognition;
-
-            // Vérifier le support et contexte sécurisé
-            const isSecure =
-                location.protocol === "https:" ||
-                location.hostname === "localhost";
-            if (!SR || !isSecure) {
-                // Fallback convivial : ouvrir un prompt pour permettre la saisie vocale via OS ou taper manuellement
-                const hint = !isSecure
-                    ? "La reconnaissance vocale nécessite HTTPS. "
-                    : "";
-                const reply = prompt(
-                    hint + "Parlez maintenant (ou tapez votre recherche) :"
-                );
-                if (reply && reply.trim().length) {
-                    searchInput.value = reply.trim();
-                    doSearch();
-                }
-                return;
-            }
-
-            if (!speechRecognition) {
-                speechRecognition = new SR();
-                speechRecognition.lang = "fr-FR";
-                speechRecognition.interimResults = false;
-                speechRecognition.maxAlternatives = 1;
-                speechRecognition.onresult = (e) => {
-                    try {
-                        const t = e.results[0][0].transcript;
-                        searchInput.value = t;
-                        doSearch();
-                    } catch (err) {
-                        console.debug("speech result error", err);
-                    }
-                };
-                speechRecognition.onend = () => {
-                    speechListening = false;
-                    micBtn.classList.remove("listening");
-                    micBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
-                };
-                speechRecognition.onerror = (ev) => {
-                    console.warn("speech error", ev);
-                    speechListening = false;
-                    micBtn.classList.remove("listening");
-                    micBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
-                };
-            }
-            if (!speechListening) {
-                try {
-                    speechRecognition.start();
-                    speechListening = true;
-                    micBtn.classList.add("listening");
-                    micBtn.innerHTML =
-                        '<i class="fa-solid fa-microphone-lines"></i>';
-                } catch (e) {
-                    console.debug("start recognition error", e);
-                }
-            } else {
-                try {
-                    speechRecognition.stop();
-                } catch (e) {
-                    console.debug("stop recognition error", e);
-                }
-            }
-        }
-
-        // ===== Vos Trajets (UI + actions) =====
-        async function fetchServerTrips() {
+        // If logged in, persist server-side
+        if (currentUserId) {
             try {
-                const res = await fetch("/trips", {
-                    credentials: "same-origin",
-                    headers: { Accept: "application/json" },
-                });
-                if (!res.ok) return [];
-                return await res.json();
-            } catch (e) {
-                console.debug("fetchServerTrips error", e);
-                return [];
-            }
-        }
-
-        window.renderTrips = async function () {
-            const container = document.getElementById("trips-list");
-            if (!container) return;
-            container.innerHTML = "";
-            let items = [];
-            if (currentUserId) {
-                items = await fetchServerTrips();
-            }
-            if (!items || items.length === 0) {
-                container.innerHTML =
-                    '<div class="text-muted small">Aucun trajet enregistré</div>';
-                return;
-            }
-            items.forEach((t) => {
-                const item = document.createElement("div");
-                item.className =
-                    "list-group-item d-flex align-items-center justify-content-between";
-
-                const left = document.createElement("div");
-                left.className = "d-flex flex-column";
-                const title = document.createElement("strong");
-                title.innerText = t.name || `Trajet #${t.id}`;
-                const meta = document.createElement("small");
-                meta.className = "text-muted";
-                meta.innerText = `${t.start_lat || ""}, ${
-                    t.start_lng || ""
-                } → ${t.end_lat || ""}, ${t.end_lng || ""}`;
-                left.appendChild(title);
-                left.appendChild(meta);
-
-                const right = document.createElement("div");
-                right.className = "d-flex gap-1 align-items-center";
-
-                const goBtn = document.createElement("button");
-                goBtn.type = "button";
-                goBtn.className = "btn btn-sm btn-primary";
-                goBtn.innerText = "Aller";
-                goBtn.addEventListener("click", () => {
-                    if (t.end_lat && t.end_lng) {
-                        setDestination(Number(t.end_lat), Number(t.end_lng));
-                        const sb = document.getElementById("left-sidebar");
-                        if (sb) sb.classList.remove("open");
-                    } else alert("Coordonnées d'arrivée manquantes.");
-                });
-
-                const delBtn = document.createElement("button");
-                delBtn.type = "button";
-                delBtn.className = "history-delete-btn";
-                delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                delBtn.title = "Supprimer";
-                delBtn.addEventListener("click", async (ev) => {
-                    ev.stopPropagation();
-                    await deleteTrip(t.id);
-                });
-
-                right.appendChild(goBtn);
-                right.appendChild(delBtn);
-
-                item.appendChild(left);
-                item.appendChild(right);
-                container.appendChild(item);
-            });
-        };
-
-        window.openTripsToggle = function () {
-            console.log("openTripsToggle called");
-            const tripsBlock = document.getElementById("trips-block");
-            if (!tripsBlock) {
-                console.log("tripsBlock not found");
-                return;
-            }
-            if (tripsBlock.classList.contains("d-none")) {
-                tripsBlock.classList.remove("d-none");
-                console.log("showing trips-block");
-                window.renderTrips();
-                // Scroll the sidebar to make the trips-block visible
-                tripsBlock.scrollIntoView({ behavior: "smooth" });
-            } else {
-                tripsBlock.classList.add("d-none");
-                console.log("hiding trips-block");
-            }
-        };
-
-        function openTripModal(prefStart, prefEnd) {
-            const startInput = document.getElementById("tripStart");
-            const endInput = document.getElementById("tripEnd");
-            const nameInput = document.getElementById("tripNameInput");
-            if (startInput) startInput.value = prefStart || "";
-            if (endInput) endInput.value = prefEnd || "";
-            if (nameInput) nameInput.value = "";
-            const m = new bootstrap.Modal(document.getElementById("tripModal"));
-            m.show();
-        }
-
-        async function addTrip() {
-            const name = document.getElementById("tripNameInput")?.value || "";
-            const start = document.getElementById("tripStart")?.value || "";
-            const end = document.getElementById("tripEnd")?.value || "";
-            const mode =
-                document.getElementById("tripMode")?.value || "driving";
-            if (!start || !end) return alert("Départ ou arrivée manquant.");
-            const [sLat, sLng] = start.split(",").map((x) => Number(x.trim()));
-            const [eLat, eLng] = end.split(",").map((x) => Number(x.trim()));
-            try {
-                const res = await fetch("/trips", {
+                const payload = {
+                    name,
+                    type,
+                    latitude: Number(lat),
+                    longitude: Number(lon),
+                };
+                await fetch("/favorites", {
                     method: "POST",
                     credentials: "same-origin",
                     headers: {
@@ -1368,86 +1744,245 @@ document.addEventListener("DOMContentLoaded", () => {
                         "X-CSRF-TOKEN": csrf,
                         Accept: "application/json",
                     },
-                    body: JSON.stringify({
-                        name,
-                        start_lat: sLat,
-                        start_lng: sLng,
-                        end_lat: eLat,
-                        end_lng: eLng,
-                        mode,
-                    }),
+                    body: JSON.stringify(payload),
                 });
-                if (!res.ok) throw new Error("save failed");
-                await window.renderTrips();
-                const modal = bootstrap.Modal.getInstance(
-                    document.getElementById("tripModal")
-                );
-                if (modal) modal.hide();
-                alert("Trajet enregistré.");
+                await renderFavorites();
+                alert("Adresse enregistrée (serveur).");
+                return;
             } catch (e) {
-                console.debug("addTrip error", e);
-                alert("Erreur lors de l'enregistrement.");
+                console.debug("favorite post error", e);
             }
         }
 
-        async function deleteTrip(id) {
-            if (!confirm("Supprimer ce trajet ?")) return;
-            try {
-                const res = await fetch(`/trips/${id}`, {
-                    method: "DELETE",
-                    credentials: "same-origin",
-                    headers: { "X-CSRF-TOKEN": csrf },
-                });
-                if (!res.ok) throw new Error("delete failed");
-                await window.renderTrips();
-            } catch (e) {
-                console.debug("deleteTrip error", e);
-                alert("Erreur suppression.");
-            }
-        }
+        const list = loadFavorites();
+        const entry = {
+            id: Date.now(),
+            name,
+            type,
+            lat: Number(lat),
+            lon: Number(lon),
+            created_at: new Date().toISOString(),
+        };
+        list.unshift(entry);
+        saveFavorites(list);
+        await renderFavorites();
+        try {
+            renderFavoriteMarkers();
+        } catch (e) {}
+        alert("Adresse enregistrée.");
+    }
+    try {
+        window.addCurrentFavorite = addCurrentFavorite;
+    } catch (e) {}
 
-        // Hook trips UI
-        document.addEventListener("DOMContentLoaded", function () {
-            const openTrips = document.getElementById("openTrips");
-            console.log("openTrips element:", openTrips);
-            const addTripBtn = document.getElementById("add-current-trip");
-            const tripSaveBtn = document.getElementById("tripSaveBtn");
-            if (openTrips)
-                openTrips.addEventListener("click", function (ev) {
-                    ev.preventDefault();
-                    console.log("openTrips direct click");
-                    openTripsToggle();
-                });
-            if (addTripBtn)
-                addTripBtn.addEventListener("click", function () {
-                    // prefill: start = user position, end = destinationMarker or map center
-                    const start =
-                        userLat && userLon
-                            ? `${userLat.toFixed(6)}, ${userLon.toFixed(6)}`
-                            : "";
-                    let end = "";
-                    if (
-                        typeof destinationMarker !== "undefined" &&
-                        destinationMarker &&
-                        destinationMarker.getLatLng
-                    ) {
-                        const ll = destinationMarker.getLatLng();
-                        end = `${ll.lat.toFixed(6)}, ${ll.lng.toFixed(6)}`;
-                    } else if (map && map.getCenter) {
-                        const c = map.getCenter();
-                        end = `${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`;
-                    }
-                    openTripModal(start, end);
-                });
-            if (tripSaveBtn) tripSaveBtn.addEventListener("click", addTrip);
-            // initial render
-            try {
-                renderTrips();
-            } catch (e) {}
+    // Hook favorites UI immediately (script loaded at end of body)
+    (function () {
+        const openSaved = document.getElementById("openSavedAddresses");
+        const savedBlock = document.getElementById("saved-addresses");
+        if (openSaved && savedBlock) {
+            openSaved.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                // toggle
+                if (savedBlock.classList.contains("d-none"))
+                    savedBlock.classList.remove("d-none");
+                else savedBlock.classList.add("d-none");
+                renderFavorites();
+            });
+        }
+        const addFavBtn = document.getElementById("add-current-favorite");
+        if (addFavBtn) addFavBtn.addEventListener("click", addCurrentFavorite);
+        // render if block visible
+        if (savedBlock && !savedBlock.classList.contains("d-none"))
+            renderFavorites();
+        // render favorite markers initially
+        try {
+            renderFavoriteMarkers();
+        } catch (e) {}
+    })();
+
+    // initialise history
+    loadHistory();
+    renderHistory();
+
+    // Hook up sidebar history controls (buttons inside blade)
+    const historyBtn = document.getElementById("historyBtn");
+    const historyContainer = document.getElementById("search-history");
+    const clearHistoryBtn = document.getElementById("clear-history");
+    if (historyBtn && historyContainer) {
+        historyBtn.addEventListener("click", function () {
+            const open = !historyContainer.classList.contains("d-none");
+            if (open) {
+                historyContainer.classList.add("d-none");
+            } else {
+                historyContainer.classList.remove("d-none");
+                renderHistory();
+            }
         });
+    }
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener("click", async function () {
+            if (currentUserId) {
+                try {
+                    await fetch("/search-history", {
+                        method: "DELETE",
+                        credentials: "same-origin",
+                        headers: { "X-CSRF-TOKEN": csrf },
+                    });
+                } catch (e) {
+                    console.debug("clear history error", e);
+                }
+                await loadHistory();
+                renderHistory();
+                return;
+            }
+            searchHistory = [];
+            saveHistory();
+            renderHistory();
+        });
+    }
 
-        micBtn.onclick = toggleVoiceSearch;
+    function showResults(items) {
+        if (!searchResults) return;
+        searchResults.innerHTML = "";
+        // If a previous handler hid the results with `d-none`, remove it so
+        // `show` can take effect and make the list visible.
+        searchResults.classList.remove("d-none");
+        if (!items || items.length === 0) {
+            searchResults.classList.remove("show");
+            return;
+        }
+        items.forEach((it) => {
+            const div = document.createElement("div");
+            div.className = "search-item";
+            div.innerHTML = `<i class="fa-solid fa-location-dot"></i><span>${
+                it.display_name || it.name || ""
+            }</span>`;
+            div.onclick = () => {
+                const lat = parseFloat(it.lat);
+                const lon = parseFloat(it.lon);
+                setDestination(lat, lon);
+                searchResults.classList.remove("show");
+                if (searchInput) searchInput.value = it.display_name || "";
+                // store selection in history
+                try {
+                    addToHistory({
+                        name: it.display_name || it.name || "",
+                        lat,
+                        lon,
+                    });
+                } catch (e) {
+                    console.debug("history add error", e);
+                }
+            };
+            searchResults.appendChild(div);
+        });
+        // Use the `show` class consistently to display results.
+        searchResults.classList.add("show");
+    }
 
+    const doSearch = debounce(async (ev) => {
+        if (!searchInput || !searchResults) return;
+        const q = searchInput.value.trim();
+        if (q.length < 2) {
+            searchResults.classList.remove("show");
+            return;
+        }
+        const items = await performSearch(q);
+        showResults(items);
+    }, 300);
+
+    // Exposer pour debug/console
+    try {
+        window.performSearch = performSearch;
+        window.doSearch = doSearch;
+    } catch (e) {}
+
+    // Comportement des boutons
+    if (searchIconBtn) {
+        searchIconBtn.onclick = () => {
+            searchInput.focus();
+            doSearch();
+        };
+    }
+
+    // Reconnaissance vocale simple (toggle) avec fallback si non supportée
+    let speechRecognition = null;
+    let speechListening = false;
+    function toggleVoiceSearch() {
+        const SR =
+            window.SpeechRecognition ||
+            window.webkitSpeechRecognition ||
+            window.mozSpeechRecognition ||
+            window.msSpeechRecognition;
+
+        // Vérifier le support et contexte sécurisé
+        const isSecure =
+            location.protocol === "https:" || location.hostname === "localhost";
+        if (!SR || !isSecure) {
+            // Fallback convivial : ouvrir un prompt pour permettre la saisie vocale via OS ou taper manuellement
+            const hint = !isSecure
+                ? "La reconnaissance vocale nécessite HTTPS. "
+                : "";
+            const reply = prompt(
+                hint + "Parlez maintenant (ou tapez votre recherche) :",
+            );
+            if (reply && reply.trim().length && searchInput) {
+                searchInput.value = reply.trim();
+                doSearch();
+            }
+            return;
+        }
+
+        if (!speechRecognition) {
+            speechRecognition = new SR();
+            speechRecognition.lang = "fr-FR";
+            speechRecognition.interimResults = false;
+            speechRecognition.maxAlternatives = 1;
+            speechRecognition.onresult = (e) => {
+                try {
+                    const t = e.results[0][0].transcript;
+                    if (searchInput) {
+                        searchInput.value = t;
+                        doSearch();
+                    }
+                } catch (err) {
+                    console.debug("speech result error", err);
+                }
+            };
+            speechRecognition.onend = () => {
+                speechListening = false;
+                micBtn.classList.remove("listening");
+                micBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
+            };
+            speechRecognition.onerror = (ev) => {
+                console.warn("speech error", ev);
+                speechListening = false;
+                micBtn.classList.remove("listening");
+                micBtn.innerHTML = '<i class="fa-solid fa-microphone"></i>';
+            };
+        }
+        if (!speechListening) {
+            try {
+                speechRecognition.start();
+                speechListening = true;
+                micBtn.classList.add("listening");
+                micBtn.innerHTML =
+                    '<i class="fa-solid fa-microphone-lines"></i>';
+            } catch (e) {
+                console.debug("start recognition error", e);
+            }
+        } else {
+            try {
+                speechRecognition.stop();
+            } catch (e) {
+                console.debug("stop recognition error", e);
+            }
+        }
+    }
+
+    if (micBtn) micBtn.onclick = toggleVoiceSearch;
+
+    if (searchInput) {
         searchInput.addEventListener("input", doSearch);
         searchInput.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
@@ -1455,14 +1990,35 @@ document.addEventListener("DOMContentLoaded", () => {
                 doSearch();
             }
             if (e.key === "Escape") {
-                searchResults.classList.add("d-none");
+                // Hide results by removing the `show` class (consistent with display logic)
+                if (searchResults) searchResults.classList.remove("show");
             }
         });
+    }
 
+    // Fermer les résultats quand on clique en dehors du contrôle de recherche
+    if (mapControls && searchResults) {
         document.addEventListener("click", (e) => {
-            if (!mapControls || !mapControls.contains(e.target))
-                searchResults.classList.add("d-none");
+            if (!mapControls.contains(e.target))
+                searchResults.classList.remove("show");
         });
+    } else if (searchResults && searchInput) {
+        document.addEventListener("click", (e) => {
+            if (!searchResults.contains(e.target) && e.target !== searchInput)
+                searchResults.classList.remove("show");
+        });
+    }
+    // Expose search/favorites functions globally (will override the stubs above)
+    try {
+        window.performSearch = performSearch;
+        window.doSearch = doSearch;
+        window.renderFavorites = renderFavorites;
+        window.renderHistory = renderHistory;
+        window.addCurrentFavorite = addCurrentFavorite;
+        window.loadFavorites = loadFavorites;
+        window.loadHistory = loadHistory;
+    } catch (e) {
+        console.debug("Error exposing global functions:", e);
     }
 });
 
@@ -1480,7 +2036,7 @@ function startNavigationMode() {
 
     announceNavigationStart();
     alert(
-        `🧭 Cliquez sur la carte pour choisir la destination en mode ${travelMode.toUpperCase()}`
+        `🧭 Cliquez sur la carte pour choisir la destination en mode ${travelMode.toUpperCase()}`,
     );
 
     // ATTEND LE CLIC DE DESTINATION SUR LA CARTE
@@ -1515,7 +2071,7 @@ async function reverseGeocode(lat, lon) {
                 lat,
                 lon,
                 lastGeocode.lat,
-                lastGeocode.lon
+                lastGeocode.lon,
             );
             if (d < 25 && Date.now() - lastGeocode.ts < 1000 * 60 * 5) {
                 return lastGeocode.label;
@@ -1523,7 +2079,7 @@ async function reverseGeocode(lat, lon) {
         }
 
         const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
-            lat
+            lat,
         )}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
         const res = await fetch(url, {
             headers: { Accept: "application/json" },
@@ -1663,7 +2219,7 @@ function setDestination(lat, lng) {
         (err) => {
             console.warn("watchPosition error", err);
         },
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
     );
 
     // Activer visuel de suivi (pulse) lorsque le watchPosition est actif
@@ -1855,11 +2411,11 @@ function calculateRoute(startLat, startLng, endLat, endLng) {
         .then((data) => {
             if (!data.routes || !data.routes.length) {
                 console.error(
-                    "Pas de route trouvée pour ce mode de transport."
+                    "Pas de route trouvée pour ce mode de transport.",
                 );
                 if (navigationMode)
                     alert(
-                        `⚠️ Pas de route trouvée pour le mode ${travelMode}.`
+                        `⚠️ Pas de route trouvée pour le mode ${travelMode}.`,
                     );
                 return;
             }
@@ -1986,7 +2542,22 @@ function stopNavigation() {
             .catch(() => {});
     }
 
-    speak("Navigation arrêtée.", true);
+    // Clear the destination search field and hide suggestions when navigation stops
+    try {
+        const si = document.getElementById("search-input");
+        if (si) si.value = "";
+        if (typeof searchResults !== "undefined" && searchResults) {
+            searchResults.classList.remove("show");
+            searchResults.innerHTML = "";
+        }
+    } catch (e) {
+        console.debug("clear search on stop failed", e);
+    }
+
+    // Parler seulement si le guidage vocal est activé
+    if (window.speechEnabled) {
+        speak("Navigation arrêtée.", true);
+    }
 }
 
 // La fonction onUserMove est maintenant utilisée principalement pour la convention,
@@ -2000,7 +2571,9 @@ function onUserMove(lat, lon) {
 // 🔊 GUIDAGE VOCAL AVANCÉ
 // =====================================================
 
-let speechEnabled = true;
+let speechEnabled = localStorage.getItem("voiceGuidance") !== "false"; // Defaults to true unless explicitly set to false
+// Exposer en tant que propriété globale pour que les toggles puissent la modifier
+window.speechEnabled = speechEnabled;
 let lastVoiceMessage = "";
 let lastVoiceTime = 0;
 let arrived = false;
@@ -2013,7 +2586,12 @@ const EVENT_ALERT_DISTANCE = 300; // mètres
 // 🎤 FONCTION VOCALE INTELLIGENTE
 // =====================================================
 function speak(text, force = false) {
-    if (!speechEnabled || !("speechSynthesis" in window)) return;
+    // Lire depuis window.speechEnabled pour que les toggles puissent la modifier
+    const enabled =
+        typeof window.speechEnabled !== "undefined"
+            ? window.speechEnabled
+            : speechEnabled;
+    if (!enabled || !("speechSynthesis" in window)) return;
 
     const now = Date.now();
 
@@ -2043,10 +2621,16 @@ function speak(text, force = false) {
 function announceNavigationStart() {
     arrived = false;
     // Annonce du mode, l'ETA arrive juste après via calculateRoute
-    speak(
-        `Navigation démarrée en mode ${travelMode}. Suivez l'itinéraire.`,
-        true
-    );
+    let startMessage = `Navigation démarrée en mode ${travelMode}.`;
+    if (travelMode === "driving") {
+        startMessage +=
+            " Préparez-vous à suivre les instructions. Soyez prudent.";
+    } else if (travelMode === "bike") {
+        startMessage += " Pédalez prudemment et suivez les indications.";
+    } else if (travelMode === "foot") {
+        startMessage += " Commencez à marcher en suivant le trajet.";
+    }
+    speak(startMessage, true);
 }
 
 function announceArrival() {
@@ -2078,7 +2662,7 @@ function announceETA(distanceMeters) {
     // Force l'annonce initiale
     speak(
         `Distance totale : ${kmDistance} kilomètres. Temps de parcours estimé : ${minutes} minutes.`,
-        true
+        true,
     );
 }
 
@@ -2123,18 +2707,39 @@ function checkEventsOnRoute(userLat, userLon) {
     eventsData.forEach((event) => {
         const dist = map.distance(
             [userLat, userLon],
-            [event.latitude, event.longitude]
+            [event.latitude, event.longitude],
         );
 
         if (dist < EVENT_ALERT_DISTANCE) {
-            if (event.type === "accident") speak("Attention accident à venir");
-            if (event.type === "police")
-                speak("Présence de la police signalée");
-            if (event.type === "danger")
-                speak("Danger signalé sur votre route");
+            // Construire un message d'alerte détaillé avec la distance et le type
+            let message = "";
+            const distMètres = Math.round(dist);
+            const distText =
+                distMètres > 1000
+                    ? `à ${(distMètres / 1000).toFixed(1)} kilomètre`
+                    : `à ${distMètres} mètres`;
 
-            if (travelMode === "driving" && event.type === "embouteillage")
-                speak("Ralentissement signalé");
+            if (event.type === "accident") {
+                message = `Attention, accident signalé ${distText} sur votre route`;
+                if (event.description) message += ` : ${event.description}`;
+            } else if (event.type === "police") {
+                message = `Présence de la police signalée ${distText}`;
+                if (event.description) message += ` : ${event.description}`;
+            } else if (event.type === "danger") {
+                message = `Danger signalé ${distText} sur votre route`;
+                if (event.description) message += ` : ${event.description}`;
+            } else if (event.type === "embouteillage") {
+                if (travelMode === "driving") {
+                    message = `Ralentissement ou embouteillage signalé ${distText}`;
+                    if (event.description) message += ` : ${event.description}`;
+                } else {
+                    message = `Embouteillage signalé ${distText}, vous pouvez contourner`;
+                }
+            }
+
+            if (message) {
+                speak(message);
+            }
         }
     });
 }
@@ -2143,21 +2748,31 @@ function checkEventsOnRoute(userLat, userLon) {
 //  ETA – HEURE D'ARRIVÉE ESTIMÉE (TEMPS RÉEL)
 // =====================================================
 
-// Box ETA flottante
-const etaBox = document.createElement("div");
-etaBox.style.position = "fixed";
-etaBox.style.bottom = "90px";
-etaBox.style.left = "50%";
-etaBox.style.transform = "translateX(-50%)";
-etaBox.style.background = "rgba(0,0,0,0.75)";
-etaBox.style.color = "#fff";
-etaBox.style.padding = "8px 14px";
-etaBox.style.borderRadius = "12px";
-etaBox.style.fontSize = "14px";
-etaBox.style.zIndex = "9999";
-etaBox.style.display = "none";
-etaBox.style.boxShadow = "0 0 10px rgba(0,255,255,0.6)";
-document.body.appendChild(etaBox);
+// Box ETA flottante (création déferrée si le `body` n'existe pas encore)
+let etaBox = null;
+function ensureEtaBox() {
+    if (etaBox) return etaBox;
+    if (!document.body) {
+        // si body pas encore prêt, créer après DOMContentLoaded
+        document.addEventListener("DOMContentLoaded", ensureEtaBox);
+        return null;
+    }
+    etaBox = document.createElement("div");
+    etaBox.style.position = "fixed";
+    etaBox.style.bottom = "90px";
+    etaBox.style.left = "50%";
+    etaBox.style.transform = "translateX(-50%)";
+    etaBox.style.background = "rgba(0,0,0,0.75)";
+    etaBox.style.color = "#fff";
+    etaBox.style.padding = "8px 14px";
+    etaBox.style.borderRadius = "12px";
+    etaBox.style.fontSize = "14px";
+    etaBox.style.zIndex = "9999";
+    etaBox.style.display = "none";
+    etaBox.style.boxShadow = "0 0 10px rgba(0,255,255,0.6)";
+    document.body.appendChild(etaBox);
+    return etaBox;
+}
 
 // Fonction calcul ETA (pour l'affichage)
 function updateETA(distanceMeters) {
@@ -2181,16 +2796,19 @@ function updateETA(distanceMeters) {
         minute: "2-digit",
     });
 
-    etaBox.innerHTML = `
+    const _box = ensureEtaBox();
+    if (!_box) return;
+    _box.innerHTML = `
         ⏱️ <strong>${minutes} min</strong> restantes<br>
         🕒 Arrivée : <strong>${arrivalTime}</strong>
     `;
-    etaBox.style.display = "block";
+    _box.style.display = "block";
 }
 
 // Masquer ETA
 function hideETA() {
-    etaBox.style.display = "none";
+    const _box = ensureEtaBox();
+    if (_box) _box.style.display = "none";
 }
 
 // =========================================================================
@@ -2233,7 +2851,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 const ll = destinationMarker.getLatLng();
                 lat = ll.lat;
                 lon = ll.lng;
-            } else if (userLat && userLon) {
+            } else if (Number.isFinite(userLat) && Number.isFinite(userLon)) {
                 lat = userLat;
                 lon = userLon;
             } else if (map && map.getCenter) {
@@ -2241,7 +2859,48 @@ document.addEventListener("DOMContentLoaded", function () {
                 lat = c.lat;
                 lon = c.lng;
             }
-            if (!lat || !lon) return alert("Position non disponible.");
+            // Debug logs to inspect why coords may be missing
+            try {
+                console.debug("sharePosition click -> candidates", {
+                    destinationMarker: !!(
+                        typeof destinationMarker !== "undefined" &&
+                        destinationMarker
+                    ),
+                    destinationLatLng:
+                        typeof destinationMarker !== "undefined" &&
+                        destinationMarker &&
+                        destinationMarker.getLatLng
+                            ? destinationMarker.getLatLng()
+                            : null,
+                    userLat,
+                    userLon,
+                    mapAvailable: !!(
+                        typeof map !== "undefined" &&
+                        map &&
+                        map.getCenter
+                    ),
+                    mapCenter:
+                        typeof map !== "undefined" && map && map.getCenter
+                            ? map.getCenter()
+                            : null,
+                    geolocationAvailable: !!navigator.geolocation,
+                });
+                if (navigator.permissions && navigator.permissions.query) {
+                    navigator.permissions
+                        .query({ name: "geolocation" })
+                        .then((p) =>
+                            console.debug(
+                                "geolocation permission state:",
+                                p.state,
+                            ),
+                        );
+                }
+            } catch (e) {
+                console.debug("share debug failed", e);
+            }
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lon))
+                return alert("Position non disponible.");
             try {
                 label = await reverseGeocode(lat, lon);
             } catch (e) {
@@ -2306,22 +2965,24 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     })();
 
-    // Délégué: s'assure que le clic sur le lien 'Vos Trajet' est pris en charge
-    document.addEventListener("click", function (ev) {
-        try {
-            const clicked =
-                ev.target &&
-                ev.target.closest &&
-                ev.target.closest("#openTrips");
-            if (clicked) {
+    // Délégué: fallback au cas où le gestionnaire direct n'aurait pas pu s'attacher
+    document.addEventListener(
+        "click",
+        function (ev) {
+            if (ev.target && ev.target.id === "openTrips") {
                 ev.preventDefault();
-                console.debug("openTrips clicked (delegation)");
-                openTripsToggle();
+                ev.stopPropagation();
+                console.debug("openTrips fallback delegation triggered");
+                if (window.openTripsToggle) {
+                    window.openTripsToggle();
+                } else {
+                    console.warn("openTripsToggle not yet available");
+                }
+                return false;
             }
-        } catch (e) {
-            console.debug("openTrips delegation error", e);
-        }
-    });
+        },
+        true,
+    ); // capture phase
 });
 
 // =========================================================================
@@ -2334,3 +2995,104 @@ window.setTravelMode = setTravelMode;
 window.closeSidebar = closeSidebar;
 window.vote = vote;
 window.resetNotificationCount = resetNotificationCount;
+
+// Attach menu handlers robustly (fallback in case some initialisation paths returned early)
+(function attachMenuHandlers() {
+    try {
+        const historyBtn = document.getElementById("historyBtn");
+        const historyContainer = document.getElementById("search-history");
+        if (historyBtn && historyContainer) {
+            historyBtn.addEventListener("click", function () {
+                console.log(
+                    "✅ HISTORIQUE CLIQUÉ - avant toggle, d-none:",
+                    historyContainer.classList.contains("d-none"),
+                    "display:",
+                    window.getComputedStyle(historyContainer).display,
+                );
+                const open = !historyContainer.classList.contains("d-none");
+                if (open) {
+                    console.log("🔒 MASQUAGE historique");
+                    historyContainer.classList.add("d-none");
+                    console.log(
+                        "  après add d-none, display:",
+                        window.getComputedStyle(historyContainer).display,
+                    );
+                } else {
+                    console.log("🔓 AFFICHAGE historique");
+                    historyContainer.classList.remove("d-none");
+                    console.log(
+                        "  après remove d-none, display:",
+                        window.getComputedStyle(historyContainer).display,
+                    );
+                    try {
+                        renderHistory();
+                    } catch (e) {
+                        console.error("renderHistory error", e);
+                    }
+                }
+            });
+        }
+
+        const openSaved = document.getElementById("openSavedAddresses");
+        const savedBlock = document.getElementById("saved-addresses");
+        if (openSaved && savedBlock) {
+            openSaved.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                console.log(
+                    "✅ ADRESSES ENREGISTRÉES CLIQUÉES - avant toggle, d-none:",
+                    savedBlock.classList.contains("d-none"),
+                    "display:",
+                    window.getComputedStyle(savedBlock).display,
+                );
+                if (savedBlock.classList.contains("d-none")) {
+                    console.log("🔓 AFFICHAGE adresses enregistrées");
+                    savedBlock.classList.remove("d-none");
+                    console.log(
+                        "  après remove d-none, display:",
+                        window.getComputedStyle(savedBlock).display,
+                    );
+                } else {
+                    console.log("🔒 MASQUAGE adresses enregistrées");
+                    savedBlock.classList.add("d-none");
+                    console.log(
+                        "  après add d-none, display:",
+                        window.getComputedStyle(savedBlock).display,
+                    );
+                }
+                try {
+                    renderFavorites();
+                } catch (e) {
+                    console.error("renderFavorites error", e);
+                }
+            });
+        }
+
+        const trafficMenu = document.getElementById("trafficBtnMenu");
+        if (trafficMenu) {
+            trafficMenu.addEventListener("click", function (ev) {
+                ev.preventDefault();
+                console.log(
+                    "✅ TRAFIC CLIQUÉ - trafficEnabled:",
+                    typeof trafficEnabled !== "undefined"
+                        ? trafficEnabled
+                        : "UNDEFINED",
+                );
+                try {
+                    toggleTraffic(trafficMenu);
+                    console.log("✅ toggleTraffic exécuté avec succès");
+                } catch (e) {
+                    console.error("toggleTraffic error", e);
+                }
+            });
+        }
+
+        const shareBtn = document.getElementById("sharePositionBtn");
+        if (shareBtn) {
+            shareBtn.addEventListener("click", function (ev) {
+                console.debug("menu: sharePositionBtn clicked");
+            });
+        }
+    } catch (e) {
+        console.debug("attachMenuHandlers error", e);
+    }
+})();
