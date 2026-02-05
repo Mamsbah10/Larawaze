@@ -98,7 +98,7 @@ function closeSidebar() {
 function setTravelMode(mode) {
     if (navigationMode) {
         alert(
-            "Veuillez arrêter la navigation avant de changer de mode de transport."
+            "Veuillez arrêter la navigation avant de changer de mode de transport.",
         );
         return;
     }
@@ -117,14 +117,14 @@ function setTravelMode(mode) {
     alert(
         `Mode de transport défini sur : ${
             mode.charAt(0).toUpperCase() + mode.slice(1)
-        }`
+        }`,
     );
 }
 
 // Demande explicite de permission et mise à jour de la position
 function requestLocationPermission() {
     if (!navigator.geolocation) {
-        alert('Géolocalisation non supportée par ce navigateur.');
+        alert("Géolocalisation non supportée par ce navigateur.");
         return;
     }
     try {
@@ -132,21 +132,29 @@ function requestLocationPermission() {
             (pos) => {
                 updateGlobalCoords(pos.coords.latitude, pos.coords.longitude);
                 try {
-                    if (map) map.setView([pos.coords.latitude, pos.coords.longitude], 15);
+                    if (map)
+                        map.setView(
+                            [pos.coords.latitude, pos.coords.longitude],
+                            15,
+                        );
                 } catch (e) {}
-                const toast = document.getElementById('location-perm-toast');
-                if (toast) toast.style.display = 'none';
+                const toast = document.getElementById("location-perm-toast");
+                if (toast) toast.style.display = "none";
                 // refresh now that we have coords
-                try { refreshEventsAndCheckForNotifications(true); } catch (e) {}
+                try {
+                    refreshEventsAndCheckForNotifications(true);
+                } catch (e) {}
             },
             (err) => {
-                console.warn('requestLocationPermission failed', err);
-                alert('Impossible d\'accéder à la position. Veuillez vérifier les permissions du navigateur.');
+                console.warn("requestLocationPermission failed", err);
+                alert(
+                    "Impossible d'accéder à la position. Veuillez vérifier les permissions du navigateur.",
+                );
             },
-            { enableHighAccuracy: true, timeout: 15000 }
+            { enableHighAccuracy: true, timeout: 15000 },
         );
     } catch (e) {
-        console.debug('requestLocationPermission exception', e);
+        console.debug("requestLocationPermission exception", e);
     }
 }
 
@@ -167,13 +175,13 @@ if (navigator.geolocation) {
                     updateMapLocation(
                         userLat,
                         userLon,
-                        pos.coords.heading ?? null
+                        pos.coords.heading ?? null,
                     );
                     refreshEventsAndCheckForNotifications(true); // Premier chargement
                 } catch (e) {
                     console.debug(
                         "geolocation init deferred due to map error",
-                        e
+                        e,
                     );
                     needInitialRefresh = true;
                 }
@@ -193,7 +201,7 @@ if (navigator.geolocation) {
             } else {
                 needInitialRefresh = true;
             }
-        }
+        },
     );
 } else {
     needInitialRefresh = true;
@@ -206,7 +214,7 @@ if (navigator.geolocation) {
 function openEventModal(type) {
     if (!Number.isFinite(userLat) || !Number.isFinite(userLon))
         return alert(
-            "Position non disponible. Veuillez attendre la localisation GPS."
+            "Position non disponible. Veuillez attendre la localisation GPS.",
         );
 
     currentEventType = type;
@@ -312,7 +320,7 @@ function confirmAndSendEvent() {
                 } catch (e) {
                     console.error(
                         "sendEvent parse error — response text:",
-                        text
+                        text,
                     );
                     throw e;
                 }
@@ -333,7 +341,7 @@ function confirmAndSendEvent() {
                     description: description,
                     votes: [],
                     expires_at: new Date(
-                        Date.now() + 1000 * 60 * 60
+                        Date.now() + 1000 * 60 * 60,
                     ).toISOString(),
                 };
                 eventsData.push(tempEvent);
@@ -413,11 +421,11 @@ function refreshEventsAndCheckForNotifications(init = false) {
         .then((events) => {
             const now = new Date();
             const validEvents = events.filter(
-                (e) => new Date(e.expires_at) > now
+                (e) => new Date(e.expires_at) > now,
             );
             const maxId = validEvents.reduce(
                 (max, e) => Math.max(max, e.id || 0),
-                0
+                0,
             );
 
             if (init) {
@@ -429,11 +437,11 @@ function refreshEventsAndCheckForNotifications(init = false) {
 
             if (maxId > lastMaxEventId) {
                 const newCount = validEvents.filter(
-                    (e) => e.id > lastMaxEventId
+                    (e) => e.id > lastMaxEventId,
                 ).length;
                 if (newCount > 0) {
                     const newEvents = validEvents.filter(
-                        (e) => e.id > lastMaxEventId
+                        (e) => e.id > lastMaxEventId,
                     );
                     newEvents.forEach(function (ne) {
                         var s =
@@ -444,7 +452,7 @@ function refreshEventsAndCheckForNotifications(init = false) {
                                 s,
                                 ne.id,
                                 ne.latitude,
-                                ne.longitude
+                                ne.longitude,
                             );
                         } catch (e) {}
                     });
@@ -470,7 +478,7 @@ function drawEvents() {
         const icon = getIcon(event.type);
         const up = (event.votes || []).filter((v) => v.type === "up").length;
         const down = (event.votes || []).filter(
-            (v) => v.type === "down"
+            (v) => v.type === "down",
         ).length;
 
         const descriptionHtml = event.description
@@ -480,7 +488,7 @@ function drawEvents() {
         let userVoteType = null;
         if (currentUserId !== null) {
             const userVote = (event.votes || []).find(
-                (v) => v.user_id == currentUserId
+                (v) => v.user_id == currentUserId,
             );
             if (userVote) {
                 userVoteType = userVote.type;
@@ -938,7 +946,7 @@ document.addEventListener("DOMContentLoaded", () => {
             crossOrigin: true,
             errorTileUrl:
                 "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-        }
+        },
     );
     darkLayer = L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
@@ -948,7 +956,7 @@ document.addEventListener("DOMContentLoaded", () => {
             crossOrigin: true,
             errorTileUrl:
                 "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-        }
+        },
     );
     lightLayer.addTo(map);
     // ========================================================
@@ -1090,7 +1098,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Limiter les recherches à la Côte d'Ivoire (viewbox: SW-NE corners)
         const viewbox = `-8.6,4.3,-2.4,10.7`; // Côte d'Ivoire bounding box
         const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
-            q
+            q,
         )}&addressdetails=1&limit=8&countrycodes=ci&viewbox=${viewbox}&bounded=1`;
         try {
             const res = await fetch(url, {
@@ -1147,7 +1155,7 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             localStorage.setItem(
                 HISTORY_KEY,
-                JSON.stringify(searchHistory.slice(0, 50))
+                JSON.stringify(searchHistory.slice(0, 50)),
             );
         } catch (e) {
             console.debug("save history error", e);
@@ -1189,7 +1197,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     h.name === item.name &&
                     h.lat === item.lat &&
                     h.lon === item.lon
-                )
+                ),
         );
         searchHistory.unshift(item);
         if (searchHistory.length > 50) searchHistory.length = 50;
@@ -1335,7 +1343,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? "La reconnaissance vocale nécessite HTTPS. "
                 : "";
             const reply = prompt(
-                hint + "Parlez maintenant (ou tapez votre recherche) :"
+                hint + "Parlez maintenant (ou tapez votre recherche) :",
             );
             if (reply && reply.trim().length && searchInput) {
                 searchInput.value = reply.trim();
@@ -1434,7 +1442,7 @@ function startNavigationMode() {
 
     announceNavigationStart();
     alert(
-        `🧭 Cliquez sur la carte pour choisir la destination en mode ${travelMode.toUpperCase()}`
+        `🧭 Cliquez sur la carte pour choisir la destination en mode ${travelMode.toUpperCase()}`,
     );
 
     // ATTEND LE CLIC DE DESTINATION SUR LA CARTE
@@ -1469,7 +1477,7 @@ async function reverseGeocode(lat, lon) {
                 lat,
                 lon,
                 lastGeocode.lat,
-                lastGeocode.lon
+                lastGeocode.lon,
             );
             if (d < 25 && Date.now() - lastGeocode.ts < 1000 * 60 * 5) {
                 return lastGeocode.label;
@@ -1477,7 +1485,7 @@ async function reverseGeocode(lat, lon) {
         }
 
         const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
-            lat
+            lat,
         )}&lon=${encodeURIComponent(lon)}&addressdetails=1`;
         const res = await fetch(url, {
             headers: { Accept: "application/json" },
@@ -1536,14 +1544,14 @@ function attachTooltipPopupToggle(marker) {
                         (pos) => {
                             updateGlobalCoords(
                                 pos.coords.latitude,
-                                pos.coords.longitude
+                                pos.coords.longitude,
                             );
                             try {
                                 if (typeof map !== "undefined" && map)
                                     updateMapLocation(
                                         userLat,
                                         userLon,
-                                        pos.coords.heading ?? null
+                                        pos.coords.heading ?? null,
                                     );
                             } catch (e) {}
                         },
@@ -1554,7 +1562,7 @@ function attachTooltipPopupToggle(marker) {
                             enableHighAccuracy: true,
                             timeout: 15000,
                             maximumAge: 0,
-                        }
+                        },
                     );
                 } catch (e) {
                     console.debug("geolocation request failed:", e);
@@ -1650,7 +1658,7 @@ function setDestination(lat, lng) {
         (err) => {
             console.warn("watchPosition error", err);
         },
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 }
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 5000 },
     );
 
     // Activer visuel de suivi (pulse) lorsque le watchPosition est actif
@@ -1843,11 +1851,11 @@ function calculateRoute(startLat, startLng, endLat, endLng) {
         .then((data) => {
             if (!data.routes || !data.routes.length) {
                 console.error(
-                    "Pas de route trouvée pour ce mode de transport."
+                    "Pas de route trouvée pour ce mode de transport.",
                 );
                 if (navigationMode)
                     alert(
-                        `⚠️ Pas de route trouvée pour le mode ${travelMode}.`
+                        `⚠️ Pas de route trouvée pour le mode ${travelMode}.`,
                     );
                 return;
             }
@@ -2033,7 +2041,7 @@ function announceNavigationStart() {
     // Annonce du mode, l'ETA arrive juste après via calculateRoute
     speak(
         `Navigation démarrée en mode ${travelMode}. Suivez l'itinéraire.`,
-        true
+        true,
     );
 }
 
@@ -2066,7 +2074,7 @@ function announceETA(distanceMeters) {
     // Force l'annonce initiale
     speak(
         `Distance totale : ${kmDistance} kilomètres. Temps de parcours estimé : ${minutes} minutes.`,
-        true
+        true,
     );
 }
 
@@ -2111,7 +2119,7 @@ function checkEventsOnRoute(userLat, userLon) {
     eventsData.forEach((event) => {
         const dist = map.distance(
             [userLat, userLon],
-            [event.latitude, event.longitude]
+            [event.latitude, event.longitude],
         );
 
         if (dist < EVENT_ALERT_DISTANCE) {
@@ -2253,8 +2261,8 @@ async function renderFavorites() {
             f.type === "home"
                 ? "fa-solid fa-house"
                 : f.type === "work"
-                ? "fa-solid fa-briefcase"
-                : "fa-solid fa-school";
+                  ? "fa-solid fa-briefcase"
+                  : "fa-solid fa-school";
         icon.style.width = "26px";
         icon.style.textAlign = "center";
 
@@ -2265,7 +2273,7 @@ async function renderFavorites() {
         btn.innerText =
             f.name ||
             `${f.type} (${(f.lat || 0).toFixed(5)}, ${(f.lon || 0).toFixed(
-                5
+                5,
             )})`;
         btn.addEventListener("click", () => {
             if (typeof setDestination === "function")
@@ -2325,7 +2333,7 @@ async function addCurrentFavorite() {
     }
     if (!lat || !lon) {
         alert(
-            "Position non disponible. Autorisez la géolocalisation ou recentrez la carte."
+            "Position non disponible. Autorisez la géolocalisation ou recentrez la carte.",
         );
         return;
     }
@@ -2490,8 +2498,8 @@ document.addEventListener("DOMContentLoaded", function () {
                         .then((p) =>
                             console.debug(
                                 "geolocation permission state:",
-                                p.state
-                            )
+                                p.state,
+                            ),
                         );
                 }
             } catch (e) {
